@@ -176,22 +176,27 @@ type MonitoringList struct {
 	Items           []Monitoring `json:"items"`
 }
 
+// GetStatus returns a pointer to the Monitoring resource's Status.
 func (m *Monitoring) GetStatus() *platformcommon.Status {
 	return &m.Status.Status
 }
 
+// GetConditions returns the current set of status conditions.
 func (m *Monitoring) GetConditions() []platformcommon.Condition {
 	return m.Status.Status.Conditions
 }
 
+// SetConditions replaces the current status conditions with the given set.
 func (m *Monitoring) SetConditions(conditions []platformcommon.Condition) {
 	m.Status.Status.Conditions = conditions
 }
 
+// GetReleaseStatus returns a pointer to the component release version status.
 func (m *Monitoring) GetReleaseStatus() *platformcommon.ComponentReleaseStatus {
 	return &m.Status.ComponentReleaseStatus
 }
 
+// SetReleaseStatus updates the component release version status.
 func (m *Monitoring) SetReleaseStatus(s platformcommon.ComponentReleaseStatus) {
 	m.Status.ComponentReleaseStatus = s
 }
