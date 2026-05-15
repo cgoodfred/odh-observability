@@ -29,12 +29,15 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	fakedynamic "k8s.io/client-go/dynamic/fake"
 	fakeclientset "k8s.io/client-go/kubernetes/fake"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	platformcommon "github.com/opendatahub-io/odh-platform-utilities/api/common"
 	"github.com/opendatahub-io/odh-platform-utilities/pkg/deploy"
@@ -157,7 +160,9 @@ func TestReconcile_PreconditionsFailed(t *testing.T) {
 }
 
 // TestReconcile_NothingConfigured: all operators present, nothing configured.
-// Should be Ready=True, Degraded=False.
+// Should be Ready=True. Degraded is True because the webhook infrastructure
+// always deploys and WebhookAvailable is False when cert-manager is not
+// installed (the fake client has no cert-manager CRDs registered).
 func TestReconcile_NothingConfigured(t *testing.T) {
 	s := newTestScheme(t)
 
@@ -190,8 +195,9 @@ func TestReconcile_NothingConfigured(t *testing.T) {
 	if ready != string(metav1.ConditionTrue) {
 		t.Errorf("Ready: want True, got %q", ready)
 	}
-	if degraded != string(metav1.ConditionFalse) {
-		t.Errorf("Degraded: want False, got %q", degraded)
+	// Degraded is True because WebhookAvailable is False when cert-manager is not installed.
+	if degraded != string(metav1.ConditionTrue) {
+		t.Errorf("Degraded: want True (webhook unavailable without cert-manager), got %q", degraded)
 	}
 }
 
@@ -307,5 +313,178 @@ func TestReconcile_ObservedGenerationSet(t *testing.T) {
 
 	if got := m.Status.Status.ObservedGeneration; got != 7 {
 		t.Errorf("ObservedGeneration: want 7, got %d", got)
+	}
+}
+
+// TestReconcile_Finalizer_AddedOnCreate: the public Reconcile method should add the
+// monitoring finalizer to a new Monitoring CR that does not already have it.
+func TestReconcile_Finalizer_AddedOnCreate(t *testing.T) {
+	s := newTestScheme(t)
+
+	s.AddKnownTypeWithName(schema.GroupVersionKind{
+		Group: "operators.coreos.com", Version: "v2", Kind: "OperatorCondition",
+	}, &unstructured.Unstructured{})
+	s.AddKnownTypeWithName(schema.GroupVersionKind{
+		Group: "operators.coreos.com", Version: "v2", Kind: "OperatorConditionList",
+	}, &unstructured.UnstructuredList{})
+
+	m := newMonitoring(v1alpha1.MonitoringInstanceName)
+	// Ensure no finalizers are set initially.
+	m.Finalizers = nil
+
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(m).WithStatusSubresource(m).Build()
+	r := newTestReconciler(t, s, c)
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: v1alpha1.MonitoringInstanceName}}
+	_, err := r.Reconcile(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Reconcile returned error: %v", err)
+	}
+
+	// Re-fetch the CR from the fake client to see the updated finalizers.
+	updated := &v1alpha1.Monitoring{}
+	if err := c.Get(context.Background(), req.NamespacedName, updated); err != nil {
+		t.Fatalf("failed to get updated Monitoring: %v", err)
+	}
+
+	if !controllerutil.ContainsFinalizer(updated, monitoringFinalizer) {
+		t.Errorf("expected finalizer %q to be present, got finalizers: %v", monitoringFinalizer, updated.Finalizers)
+	}
+}
+
+// TestReconcile_Finalizer_CleanupOnDelete: when a Monitoring CR has a non-zero
+// DeletionTimestamp and the finalizer is present, Reconcile runs deleteAllOwned
+// to clean up resources before removing the finalizer.
+//
+// With fake clients the GC library's SelfSubjectRulesReview call fails, so
+// deleteAllOwned returns an error. The controller correctly propagates that
+// error and retains the finalizer (the next reconcile will retry). This test
+// verifies that retry-safe behavior: the finalizer must NOT be removed when
+// cleanup fails.
+func TestReconcile_Finalizer_CleanupOnDelete(t *testing.T) {
+	s := newTestScheme(t)
+
+	s.AddKnownTypeWithName(schema.GroupVersionKind{
+		Group: "operators.coreos.com", Version: "v2", Kind: "OperatorCondition",
+	}, &unstructured.Unstructured{})
+	s.AddKnownTypeWithName(schema.GroupVersionKind{
+		Group: "operators.coreos.com", Version: "v2", Kind: "OperatorConditionList",
+	}, &unstructured.UnstructuredList{})
+
+	m := newMonitoring(v1alpha1.MonitoringInstanceName)
+	now := metav1.Now()
+	m.DeletionTimestamp = &now
+	// The monitoring finalizer plus a dummy finalizer. The dummy prevents the
+	// fake client from auto-deleting the object when all finalizers are removed.
+	m.Finalizers = []string{monitoringFinalizer, "test/dummy"}
+
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(m).WithStatusSubresource(m).Build()
+	r := newTestReconciler(t, s, c)
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: v1alpha1.MonitoringInstanceName}}
+	_, err := r.Reconcile(context.Background(), req)
+	// deleteAllOwned fails with the fake client (SelfSubjectRulesReview is not
+	// supported), so Reconcile must return an error to trigger a retry.
+	if err == nil {
+		t.Fatal("expected Reconcile to return an error when deleteAllOwned fails, got nil")
+	}
+
+	// The finalizer must still be present because cleanup did not succeed.
+	updated := &v1alpha1.Monitoring{}
+	if err := c.Get(context.Background(), req.NamespacedName, updated); err != nil {
+		t.Fatalf("failed to get updated Monitoring: %v", err)
+	}
+
+	if !controllerutil.ContainsFinalizer(updated, monitoringFinalizer) {
+		t.Errorf("expected finalizer %q to remain (cleanup failed), got finalizers: %v", monitoringFinalizer, updated.Finalizers)
+	}
+	if !controllerutil.ContainsFinalizer(updated, "test/dummy") {
+		t.Errorf("expected dummy finalizer to remain, got finalizers: %v", updated.Finalizers)
+	}
+}
+
+// TestReconcile_Finalizer_AlreadyPresent: when the finalizer is already on the CR,
+// Reconcile should skip the add step and proceed without error.
+func TestReconcile_Finalizer_AlreadyPresent(t *testing.T) {
+	s := newTestScheme(t)
+
+	s.AddKnownTypeWithName(schema.GroupVersionKind{
+		Group: "operators.coreos.com", Version: "v2", Kind: "OperatorCondition",
+	}, &unstructured.Unstructured{})
+	s.AddKnownTypeWithName(schema.GroupVersionKind{
+		Group: "operators.coreos.com", Version: "v2", Kind: "OperatorConditionList",
+	}, &unstructured.UnstructuredList{})
+
+	m := newMonitoring(v1alpha1.MonitoringInstanceName)
+	m.Finalizers = []string{monitoringFinalizer}
+
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(m).WithStatusSubresource(m).Build()
+	r := newTestReconciler(t, s, c)
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: v1alpha1.MonitoringInstanceName}}
+	_, err := r.Reconcile(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Reconcile returned error: %v", err)
+	}
+
+	// Re-fetch and verify the finalizer is still there (not duplicated).
+	updated := &v1alpha1.Monitoring{}
+	if err := c.Get(context.Background(), req.NamespacedName, updated); err != nil {
+		t.Fatalf("failed to get updated Monitoring: %v", err)
+	}
+
+	if !controllerutil.ContainsFinalizer(updated, monitoringFinalizer) {
+		t.Errorf("expected finalizer %q to remain present, got finalizers: %v", monitoringFinalizer, updated.Finalizers)
+	}
+	// Ensure no duplicate finalizers.
+	count := 0
+	for _, f := range updated.Finalizers {
+		if f == monitoringFinalizer {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("expected exactly 1 instance of finalizer %q, got %d (finalizers: %v)", monitoringFinalizer, count, updated.Finalizers)
+	}
+}
+
+// TestReconcile_Removed_EmptyNamespace: when ManagementState is Removed and
+// Spec.Namespace is empty, reconcile should still succeed (Ready=False with
+// Removed reason). The deleteAllOwned error from empty namespace is logged but
+// does not block the reconcile.
+func TestReconcile_Removed_EmptyNamespace(t *testing.T) {
+	s := newTestScheme(t)
+
+	s.AddKnownTypeWithName(schema.GroupVersionKind{
+		Group: "operators.coreos.com", Version: "v2", Kind: "OperatorCondition",
+	}, &unstructured.Unstructured{})
+	s.AddKnownTypeWithName(schema.GroupVersionKind{
+		Group: "operators.coreos.com", Version: "v2", Kind: "OperatorConditionList",
+	}, &unstructured.UnstructuredList{})
+
+	m := newMonitoring(v1alpha1.MonitoringInstanceName)
+	m.Spec.ManagementState = platformcommon.Removed
+	m.Spec.Namespace = ""
+
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(m).WithStatusSubresource(m).Build()
+	r := newTestReconciler(t, s, c)
+
+	_, err := r.reconcile(context.Background(), m)
+	if err != nil {
+		t.Fatalf("reconcile returned error: %v", err)
+	}
+
+	var ready, readyReason string
+	for _, cond := range m.Status.Status.Conditions {
+		if cond.Type == string(platformcommon.ConditionTypeReady) {
+			ready = string(cond.Status)
+			readyReason = cond.Reason
+		}
+	}
+	if ready != string(metav1.ConditionFalse) {
+		t.Errorf("Ready: want False, got %q", ready)
+	}
+	if readyReason != "Removed" {
+		t.Errorf("Ready reason: want %q, got %q", "Removed", readyReason)
 	}
 }

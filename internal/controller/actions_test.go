@@ -23,11 +23,17 @@ import (
 	platformcommon "github.com/opendatahub-io/odh-platform-utilities/api/common"
 	libconditions "github.com/opendatahub-io/odh-platform-utilities/pkg/controller/conditions"
 	rendertemplate "github.com/opendatahub-io/odh-platform-utilities/pkg/render/template"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/opendatahub-io/odh-observability/api/v1alpha1"
 	"github.com/opendatahub-io/odh-observability/internal/controller/conditions"
@@ -485,5 +491,314 @@ func TestDeployPersesPrometheusIntegration_CRDPresent(t *testing.T) {
 	c := findCondition(m, conditions.ConditionPersesPrometheusDataSourceAvailable)
 	if c == nil || c.Status != metav1.ConditionTrue {
 		t.Error("PersesPrometheusDataSourceAvailable should be True")
+	}
+}
+
+// --- ensureWebhookEnabled ---
+
+func TestEnsureWebhookEnabled_AllComponentsPresent(t *testing.T) {
+	s := newActionsTestScheme(t)
+
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-operator", Namespace: "test-ns"},
+		Spec: appsv1.DeploymentSpec{
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{
+						Name: "manager",
+						Args: []string{"--leader-elect", webhookArgEnabled},
+						Ports: []corev1.ContainerPort{{
+							Name:          "webhook",
+							ContainerPort: webhookPort,
+							Protocol:      corev1.ProtocolTCP,
+						}},
+						VolumeMounts: []corev1.VolumeMount{{
+							Name:      webhookVolumeName,
+							MountPath: webhookCertMountPath,
+							ReadOnly:  true,
+						}},
+					}},
+					Volumes: []corev1.Volume{{
+						Name: webhookVolumeName,
+						VolumeSource: corev1.VolumeSource{
+							Secret: &corev1.SecretVolumeSource{
+								SecretName: "test-operator-webhook-cert",
+							},
+						},
+					}},
+				},
+			},
+		},
+	}
+
+	cli := fake.NewClientBuilder().WithScheme(s).WithObjects(dep).Build()
+	err := ensureWebhookEnabled(context.Background(), cli, "test-operator", "test-ns", "test-operator-webhook-cert")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify deployment was not modified (all components already present).
+	got := &appsv1.Deployment{}
+	if err := cli.Get(context.Background(), types.NamespacedName{Name: "test-operator", Namespace: "test-ns"}, got); err != nil {
+		t.Fatalf("failed to get deployment: %v", err)
+	}
+
+	container := got.Spec.Template.Spec.Containers[0]
+	if len(container.Args) != 2 {
+		t.Errorf("expected 2 args (unchanged), got %d", len(container.Args))
+	}
+	if len(container.Ports) != 1 {
+		t.Errorf("expected 1 port (unchanged), got %d", len(container.Ports))
+	}
+	if len(container.VolumeMounts) != 1 {
+		t.Errorf("expected 1 volume mount (unchanged), got %d", len(container.VolumeMounts))
+	}
+	if len(got.Spec.Template.Spec.Volumes) != 1 {
+		t.Errorf("expected 1 volume (unchanged), got %d", len(got.Spec.Template.Spec.Volumes))
+	}
+}
+
+func TestEnsureWebhookEnabled_ArgPresentButPortMissing(t *testing.T) {
+	s := newActionsTestScheme(t)
+
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-operator", Namespace: "test-ns"},
+		Spec: appsv1.DeploymentSpec{
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{
+						Name: "manager",
+						Args: []string{"--leader-elect", webhookArgEnabled},
+					}},
+				},
+			},
+		},
+	}
+
+	cli := fake.NewClientBuilder().WithScheme(s).WithObjects(dep).Build()
+	err := ensureWebhookEnabled(context.Background(), cli, "test-operator", "test-ns", "test-operator-webhook-cert")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// All 4 components are checked individually — missing port should be added.
+	got := &appsv1.Deployment{}
+	if err := cli.Get(context.Background(), types.NamespacedName{Name: "test-operator", Namespace: "test-ns"}, got); err != nil {
+		t.Fatalf("failed to get deployment: %v", err)
+	}
+
+	container := got.Spec.Template.Spec.Containers[0]
+	if len(container.Ports) != 1 {
+		t.Errorf("expected 1 port added for partial drift repair, got %d", len(container.Ports))
+	}
+}
+
+func TestEnsureWebhookEnabled_NothingPresent(t *testing.T) {
+	s := newActionsTestScheme(t)
+
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-operator", Namespace: "test-ns"},
+		Spec: appsv1.DeploymentSpec{
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{
+						Name: "manager",
+						Args: []string{"--leader-elect"},
+					}},
+				},
+			},
+		},
+	}
+
+	cli := fake.NewClientBuilder().WithScheme(s).WithObjects(dep).Build()
+	err := ensureWebhookEnabled(context.Background(), cli, "test-operator", "test-ns", "test-operator-webhook-cert")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := &appsv1.Deployment{}
+	if err := cli.Get(context.Background(), types.NamespacedName{Name: "test-operator", Namespace: "test-ns"}, got); err != nil {
+		t.Fatalf("failed to get deployment: %v", err)
+	}
+
+	container := got.Spec.Template.Spec.Containers[0]
+
+	// Verify webhook arg was added.
+	foundArg := false
+	for _, arg := range container.Args {
+		if arg == webhookArgEnabled {
+			foundArg = true
+			break
+		}
+	}
+	if !foundArg {
+		t.Error("expected webhook arg to be added")
+	}
+
+	// Verify webhook port was added.
+	foundPort := false
+	for _, p := range container.Ports {
+		if p.ContainerPort == webhookPort {
+			foundPort = true
+			break
+		}
+	}
+	if !foundPort {
+		t.Error("expected webhook port to be added")
+	}
+
+	// Verify volume mount was added.
+	foundMount := false
+	for _, vm := range container.VolumeMounts {
+		if vm.Name == webhookVolumeName && vm.MountPath == webhookCertMountPath {
+			foundMount = true
+			break
+		}
+	}
+	if !foundMount {
+		t.Error("expected webhook volume mount to be added")
+	}
+
+	// Verify volume was added.
+	foundVolume := false
+	for _, v := range got.Spec.Template.Spec.Volumes {
+		if v.Name == webhookVolumeName {
+			foundVolume = true
+			break
+		}
+	}
+	if !foundVolume {
+		t.Error("expected webhook volume to be added")
+	}
+}
+
+func TestEnsureWebhookEnabled_NoContainers(t *testing.T) {
+	s := newActionsTestScheme(t)
+
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-operator", Namespace: "test-ns"},
+		Spec: appsv1.DeploymentSpec{
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{},
+				},
+			},
+		},
+	}
+
+	cli := fake.NewClientBuilder().WithScheme(s).WithObjects(dep).Build()
+	err := ensureWebhookEnabled(context.Background(), cli, "test-operator", "test-ns", "test-operator-webhook-cert")
+	if err == nil {
+		t.Fatal("expected error when deployment has no containers, got nil")
+	}
+}
+
+// --- deployWebhookInfrastructure ---
+
+func TestDeployWebhookInfrastructure_NoCertManagerCRD(t *testing.T) {
+	s := newActionsTestScheme(t)
+	m := newMonitoring(v1alpha1.MonitoringInstanceName)
+
+	cm := conditions.NewConditionsManager(m, m.Generation)
+	var sources []rendertemplate.TemplateSource
+
+	// The fake client does not reject unregistered unstructured GVKs, so we use
+	// an interceptor to return a NoMatchError for the Issuer list call, which is
+	// what a real cluster returns when the CRD is not installed.
+	intercept := interceptor.Funcs{
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if u, ok := list.(*unstructured.UnstructuredList); ok {
+				if u.GetKind() == "IssuerList" {
+					return &meta.NoResourceMatchError{PartialResource: schema.GroupVersionResource{
+						Group:    gvk.CertManagerIssuer.Group,
+						Version:  gvk.CertManagerIssuer.Version,
+						Resource: "issuers",
+					}}
+				}
+			}
+			return c.List(ctx, list, opts...)
+		},
+	}
+
+	cli := fake.NewClientBuilder().WithScheme(s).WithInterceptorFuncs(intercept).Build()
+	err := deployWebhookInfrastructure(context.Background(), cli, m, cm, &sources)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	webhookC := findCondition(m, conditions.ConditionWebhookAvailable)
+	if webhookC == nil {
+		t.Fatal("expected WebhookAvailable condition to be set")
+	}
+	if webhookC.Status != metav1.ConditionFalse {
+		t.Errorf("expected WebhookAvailable=False, got %s", webhookC.Status)
+	}
+	if webhookC.Reason != "CertManagerNotAvailable" {
+		t.Errorf("expected reason CertManagerNotAvailable, got %s", webhookC.Reason)
+	}
+}
+
+func TestDeployWebhookInfrastructure_SecretNotFound(t *testing.T) {
+	s := newActionsTestScheme(t)
+	registerCRDs(s, gvk.CertManagerIssuer)
+
+	t.Setenv("OPERATOR_NAME", "test-operator")
+	t.Setenv("POD_NAMESPACE", "test-ns")
+
+	m := newMonitoring(v1alpha1.MonitoringInstanceName)
+
+	cm := conditions.NewConditionsManager(m, m.Generation)
+	var sources []rendertemplate.TemplateSource
+
+	cli := fake.NewClientBuilder().WithScheme(s).Build()
+	err := deployWebhookInfrastructure(context.Background(), cli, m, cm, &sources)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	webhookC := findCondition(m, conditions.ConditionWebhookAvailable)
+	if webhookC == nil {
+		t.Fatal("expected WebhookAvailable condition to be set")
+	}
+	if webhookC.Status != metav1.ConditionFalse {
+		t.Errorf("expected WebhookAvailable=False, got %s", webhookC.Status)
+	}
+	if webhookC.Reason != "TLSSecretPending" {
+		t.Errorf("expected reason TLSSecretPending, got %s", webhookC.Reason)
+	}
+}
+
+func TestDeployWebhookInfrastructure_TLSSecretEmpty(t *testing.T) {
+	s := newActionsTestScheme(t)
+	registerCRDs(s, gvk.CertManagerIssuer)
+
+	t.Setenv("OPERATOR_NAME", "test-operator")
+	t.Setenv("POD_NAMESPACE", "test-ns")
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-operator-webhook-cert", Namespace: "test-ns"},
+		Data:       map[string][]byte{},
+	}
+
+	m := newMonitoring(v1alpha1.MonitoringInstanceName)
+
+	cm := conditions.NewConditionsManager(m, m.Generation)
+	var sources []rendertemplate.TemplateSource
+
+	cli := fake.NewClientBuilder().WithScheme(s).WithObjects(secret).Build()
+	err := deployWebhookInfrastructure(context.Background(), cli, m, cm, &sources)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	webhookC := findCondition(m, conditions.ConditionWebhookAvailable)
+	if webhookC == nil {
+		t.Fatal("expected WebhookAvailable condition to be set")
+	}
+	if webhookC.Status != metav1.ConditionFalse {
+		t.Errorf("expected WebhookAvailable=False, got %s", webhookC.Status)
+	}
+	if webhookC.Reason != "TLSSecretPending" {
+		t.Errorf("expected reason TLSSecretPending, got %s", webhookC.Reason)
 	}
 }

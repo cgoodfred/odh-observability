@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"encoding/base64"
+	"fmt"
 	"testing"
 
 	odhLabels "github.com/opendatahub-io/odh-platform-utilities/pkg/metadata/labels"
@@ -27,7 +28,9 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/opendatahub-io/odh-observability/api/v1alpha1"
 	"github.com/opendatahub-io/odh-observability/internal/controller/gvk"
@@ -439,4 +442,81 @@ func TestHasCRDWithVersion_DifferentVersion(t *testing.T) {
 
 func objKey(ns, name string) types.NamespacedName {
 	return types.NamespacedName{Namespace: ns, Name: name}
+}
+
+// --- syncStatusURL error path ---
+
+func TestSyncStatusURL_ReturnsErrorOnAPIFailure(t *testing.T) {
+	s := newTestScheme(t)
+	m := newMonitoring(v1alpha1.MonitoringInstanceName)
+	m.Spec.Metrics = &v1alpha1.Metrics{}
+
+	intercept := interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*routev1.Route); ok {
+				return fmt.Errorf("simulated API error")
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	}
+
+	cli := fake.NewClientBuilder().WithScheme(s).WithInterceptorFuncs(intercept).Build()
+
+	err := syncStatusURL(context.Background(), cli, m)
+	if err == nil {
+		t.Fatal("expected error from syncStatusURL, got nil")
+	}
+	if m.Status.URL != "" {
+		t.Errorf("URL should be cleared on error, got %q", m.Status.URL)
+	}
+}
+
+// --- syncPrometheusWebTLSCA error path ---
+
+func TestSyncPrometheusWebTLSCA_APIErrorReturnsError(t *testing.T) {
+	s := newTestScheme(t)
+	m := newMonitoring(v1alpha1.MonitoringInstanceName)
+	m.Spec.Metrics = &v1alpha1.Metrics{}
+
+	intercept := interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if u, ok := obj.(*unstructured.Unstructured); ok {
+				gvk := u.GroupVersionKind()
+				if gvk.Kind == "ConfigMap" && gvk.Version == "v1" {
+					return fmt.Errorf("simulated API error")
+				}
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	}
+
+	cli := fake.NewClientBuilder().WithScheme(s).WithInterceptorFuncs(intercept).Build()
+
+	err := syncPrometheusWebTLSCA(context.Background(), cli, m)
+	if err == nil {
+		t.Fatal("expected error from syncPrometheusWebTLSCA, got nil")
+	}
+}
+
+// --- hasCRD error path ---
+
+func TestHasCRD_APIError(t *testing.T) {
+	s := newTestScheme(t)
+	registerCRDs(s, gvk.MonitoringStack)
+
+	intercept := interceptor.Funcs{
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			return fmt.Errorf("simulated API error")
+		},
+	}
+
+	cli := fake.NewClientBuilder().WithScheme(s).WithInterceptorFuncs(intercept).Build()
+
+	found, err := hasCRD(context.Background(), cli, gvk.MonitoringStack)
+	if err == nil {
+		t.Fatal("expected error from hasCRD, got nil")
+	}
+	if found {
+		t.Error("expected found to be false when API returns error")
+	}
 }
