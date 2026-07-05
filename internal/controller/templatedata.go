@@ -102,6 +102,7 @@ func buildTemplateData(ctx context.Context, c client.Client, monitoring *v1alpha
 
 	templateData := map[string]any{
 		"Namespace":            monitoring.Spec.Namespace,
+		"GatewayNamespace":     getEnvOrDefault("GATEWAY_NAMESPACE", monitoring.Spec.Namespace),
 		"Traces":               monitoring.Spec.Traces != nil,
 		"Metrics":              monitoring.Spec.Metrics != nil,
 		"AcceleratorMetrics":   monitoring.Spec.Metrics != nil,
@@ -127,6 +128,15 @@ func buildTemplateData(ctx context.Context, c client.Client, monitoring *v1alpha
 		if err := addTracesTemplateData(templateData, traces, monitoring.Spec.Namespace); err != nil {
 			return nil, err
 		}
+	}
+
+	templateData["LogsCollectorName"] = "logs-collector"
+	if logs := monitoring.Spec.Logs; logs != nil {
+		templateData["Logs"] = true
+		templateData["LogsEndpoint"] = logs.Endpoint
+	} else {
+		templateData["Logs"] = false
+		templateData["LogsEndpoint"] = ""
 	}
 
 	// Apply SNO-aware defaulting when CollectorReplicas is unset.
