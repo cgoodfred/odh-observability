@@ -53,6 +53,9 @@ type MonitoringSpec struct {
 	// Traces configures distributed tracing via the Tempo operator.
 	Traces *Traces `json:"traces,omitempty"`
 
+	// Logs configures log collection and forwarding to Loki.
+	Logs *Logs `json:"logs,omitempty"`
+
 	// Alerting configures Prometheus alerting rules.
 	Alerting *Alerting `json:"alerting,omitempty"`
 
@@ -134,6 +137,14 @@ type TracesStorage struct {
 	Secret string `json:"secret,omitempty"`
 	// Retention specifies how long trace data is retained (e.g. "60m", "10h").
 	Retention metav1.Duration `json:"retention,omitempty"`
+}
+
+// Logs defines the configuration for log collection.
+type Logs struct {
+	// Endpoint is the Loki OTLP endpoint URL for log forwarding.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Pattern=`^https?://[a-zA-Z0-9.-]+(:[0-9]+)?(/.*)?$`
+	Endpoint string `json:"endpoint"`
 }
 
 // Alerting configures Prometheus alerting rules.
