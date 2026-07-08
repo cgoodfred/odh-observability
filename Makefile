@@ -52,6 +52,10 @@ unit-test: ## Run unit tests (no codegen prerequisites).
 test-verbose: ## Run unit tests with verbose output.
 	go test -v ./...
 
+.PHONY: lint
+lint: golangci-lint ## Run golangci-lint against code.
+	$(GOLANGCI_LINT) run
+
 .PHONY: e2e-test
 e2e-test: ## Run e2e tests against a cluster (requires KUBECONFIG).
 	go test ./tests/e2e/ -v -timeout 120m -count=1 $(E2E_TEST_FLAGS)
@@ -118,8 +122,14 @@ $(LOCALBIN):
 	mkdir -p $(LOCALBIN)
 
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
+GOLANGCI_LINT ?= $(LOCALBIN)/golangci-lint
 
 .PHONY: controller-gen
 controller-gen: $(CONTROLLER_GEN) ## Download controller-gen locally if necessary.
 $(CONTROLLER_GEN): $(LOCALBIN)
 	test -s $(LOCALBIN)/controller-gen || GOBIN=$(LOCALBIN) go install sigs.k8s.io/controller-tools/cmd/controller-gen@latest
+
+.PHONY: golangci-lint
+golangci-lint: $(GOLANGCI_LINT) ## Download golangci-lint locally if necessary.
+$(GOLANGCI_LINT): $(LOCALBIN)
+	test -s $(LOCALBIN)/golangci-lint || GOBIN=$(LOCALBIN) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
