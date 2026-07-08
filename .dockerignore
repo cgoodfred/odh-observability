@@ -1,0 +1,8 @@
+.git
+bin/
+*.md
+.github/
+.tekton/
+.golangci.yml
+tests/
+config/samples/
