@@ -83,8 +83,12 @@ func monitoringCR() *v1alpha1.Monitoring {
 	}
 }
 
-func makeAdmissionRequest(op admissionv1.Operation, kind metav1.GroupVersionKind, obj *unstructured.Unstructured) admission.Request {
-	raw, _ := json.Marshal(obj)
+func makeAdmissionRequest(t *testing.T, op admissionv1.Operation, kind metav1.GroupVersionKind, obj *unstructured.Unstructured) admission.Request {
+	t.Helper()
+	raw, err := json.Marshal(obj)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
 	return admission.Request{
 		AdmissionRequest: admissionv1.AdmissionRequest{
 			Operation: op,
@@ -100,7 +104,7 @@ func TestHandle_NilDecoder(t *testing.T) {
 		Decoder: nil,
 	}
 
-	req := makeAdmissionRequest(admissionv1.Create, metav1.GroupVersionKind{
+	req := makeAdmissionRequest(t, admissionv1.Create, metav1.GroupVersionKind{
 		Group: "monitoring.coreos.com", Version: "v1", Kind: "ServiceMonitor",
 	}, newServiceMonitor("test-ns", "sm", nil))
 
@@ -116,7 +120,7 @@ func TestHandle_NilClient(t *testing.T) {
 		Decoder: admission.NewDecoder(newTestScheme()),
 	}
 
-	req := makeAdmissionRequest(admissionv1.Create, metav1.GroupVersionKind{
+	req := makeAdmissionRequest(t, admissionv1.Create, metav1.GroupVersionKind{
 		Group: "monitoring.coreos.com", Version: "v1", Kind: "ServiceMonitor",
 	}, newServiceMonitor("test-ns", "sm", nil))
 
@@ -137,7 +141,10 @@ func TestHandle_UnexpectedKind(t *testing.T) {
 	obj.SetGroupVersionKind(gvk.CoreosServiceMonitor)
 	obj.SetNamespace("test-ns")
 	obj.SetName("sm")
-	raw, _ := json.Marshal(obj)
+	raw, err := json.Marshal(obj)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
 
 	req := admission.Request{
 		AdmissionRequest: admissionv1.AdmissionRequest{
@@ -167,7 +174,7 @@ func TestHandle_NamespaceNotLabeled(t *testing.T) {
 	}
 
 	sm := newServiceMonitor("unlabeled-ns", "my-sm", nil)
-	req := makeAdmissionRequest(admissionv1.Create, metav1.GroupVersionKind{
+	req := makeAdmissionRequest(t, admissionv1.Create, metav1.GroupVersionKind{
 		Group: "monitoring.coreos.com", Version: "v1", Kind: "ServiceMonitor",
 	}, sm)
 
@@ -194,7 +201,7 @@ func TestHandle_InjectsLabelOnServiceMonitor(t *testing.T) {
 	}
 
 	sm := newServiceMonitor("monitored-ns", "my-sm", nil)
-	req := makeAdmissionRequest(admissionv1.Create, metav1.GroupVersionKind{
+	req := makeAdmissionRequest(t, admissionv1.Create, metav1.GroupVersionKind{
 		Group: "monitoring.coreos.com", Version: "v1", Kind: "ServiceMonitor",
 	}, sm)
 
@@ -235,7 +242,7 @@ func TestHandle_InjectsLabelOnPodMonitor(t *testing.T) {
 	}
 
 	pm := newPodMonitor("monitored-ns", "my-pm", nil)
-	req := makeAdmissionRequest(admissionv1.Create, metav1.GroupVersionKind{
+	req := makeAdmissionRequest(t, admissionv1.Create, metav1.GroupVersionKind{
 		Group: "monitoring.coreos.com", Version: "v1", Kind: "PodMonitor",
 	}, pm)
 
@@ -268,7 +275,7 @@ func TestHandle_PreservesExistingLabel(t *testing.T) {
 		labelMonitoring: "true",
 		"other":         "label",
 	})
-	req := makeAdmissionRequest(admissionv1.Create, metav1.GroupVersionKind{
+	req := makeAdmissionRequest(t, admissionv1.Create, metav1.GroupVersionKind{
 		Group: "monitoring.coreos.com", Version: "v1", Kind: "ServiceMonitor",
 	}, sm)
 
@@ -294,7 +301,7 @@ func TestHandle_MonitoringCRMissing(t *testing.T) {
 	}
 
 	sm := newServiceMonitor("monitored-ns", "my-sm", nil)
-	req := makeAdmissionRequest(admissionv1.Create, metav1.GroupVersionKind{
+	req := makeAdmissionRequest(t, admissionv1.Create, metav1.GroupVersionKind{
 		Group: "monitoring.coreos.com", Version: "v1", Kind: "ServiceMonitor",
 	}, sm)
 
@@ -313,7 +320,7 @@ func TestHandle_DeleteOperation(t *testing.T) {
 	}
 
 	sm := newServiceMonitor("test-ns", "sm", nil)
-	req := makeAdmissionRequest(admissionv1.Delete, metav1.GroupVersionKind{
+	req := makeAdmissionRequest(t, admissionv1.Delete, metav1.GroupVersionKind{
 		Group: "monitoring.coreos.com", Version: "v1", Kind: "ServiceMonitor",
 	}, sm)
 

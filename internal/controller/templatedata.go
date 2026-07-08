@@ -29,6 +29,7 @@ import (
 	"strings"
 
 	"github.com/hashicorp/go-multierror"
+	"github.com/opendatahub-io/odh-platform-utilities/pkg/cluster/openshift"
 	"gopkg.in/yaml.v3"
 	k8serr "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -41,7 +42,6 @@ import (
 	v1alpha1 "github.com/opendatahub-io/odh-observability/api/v1alpha1"
 	"github.com/opendatahub-io/odh-observability/internal/controller/conditions"
 	"github.com/opendatahub-io/odh-observability/internal/controller/gvk"
-	"github.com/opendatahub-io/odh-platform-utilities/pkg/cluster/openshift"
 )
 
 const (

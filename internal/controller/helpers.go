@@ -21,15 +21,14 @@ import (
 	"encoding/base64"
 	"fmt"
 
+	odhLabels "github.com/opendatahub-io/odh-platform-utilities/pkg/metadata/labels"
+	routev1 "github.com/openshift/api/route/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
-
-	odhLabels "github.com/opendatahub-io/odh-platform-utilities/pkg/metadata/labels"
-	routev1 "github.com/openshift/api/route/v1"
 
 	v1alpha1 "github.com/opendatahub-io/odh-observability/api/v1alpha1"
 )
@@ -100,7 +99,7 @@ func syncPrometheusWebTLSCA(ctx context.Context, c client.Client, monitoring *v1
 	secret.SetKind("Secret")
 	secret.SetNamespace(namespace)
 	secret.SetName("prometheus-web-tls-ca")
-	secret.SetLabels(map[string]string{odhLabels.PlatformPartOf: "monitoring"})
+	secret.SetLabels(map[string]string{odhLabels.PlatformPartOf: v1alpha1.MonitoringServiceName})
 
 	if err := unstructured.SetNestedField(secret.Object, "Opaque", "type"); err != nil {
 		return fmt.Errorf("failed to set secret type: %w", err)
