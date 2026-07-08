@@ -1,0 +1,28 @@
+The odh-observability operator has been installed.
+
+Namespace: {{ .Values.operatorNamespace }}
+
+To get started, create a Monitoring CR:
+
+  kubectl apply -f - <<EOF
+  apiVersion: services.platform.opendatahub.io/v1alpha1
+  kind: Monitoring
+  metadata:
+    name: default-monitoring
+  spec:
+    managementState: Managed
+    namespace: {{ .Values.operatorNamespace }}
+    metrics:
+      storage:
+        size: 5Gi
+        retention: 15d
+  EOF
+
+Check operator status:
+
+  kubectl get monitoring default-monitoring
+
+Prerequisites:
+  The operator requires prerequisite operators to be installed before enabling
+  features. See the project README for details:
+  https://github.com/opendatahub-io/odh-observability
