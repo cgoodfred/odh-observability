@@ -1,0 +1,28 @@
+apiVersion: services.platform.opendatahub.io/v1alpha1
+kind: Monitoring
+metadata:
+  name: default-monitoring
+spec:
+  namespace: opendatahub
+  metrics:
+    storage:
+      size: 20Gi
+      retention: 30d
+    replicas: 2
+    exporters:
+      otlp/custom:
+        endpoint: "custom-collector.example.com:4317"
+        tls:
+          insecure: false
+  traces:
+    storage:
+      backend: s3
+      secret: tempo-s3-credentials
+      retention: 168h
+    sampleRatio: "0.5"
+    tls:
+      enabled: true
+      certificateSecret: tempo-tls-cert
+      caConfigMap: tempo-ca-bundle
+  alerting: {}
+  collectorReplicas: 3

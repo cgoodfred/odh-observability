@@ -1,0 +1,17 @@
+apiVersion: services.platform.opendatahub.io/v1alpha1
+kind: Monitoring
+metadata:
+  name: default-monitoring
+spec:
+  namespace: opendatahub
+  metrics:
+    storage:
+      size: 10Gi
+      retention: 15d
+  traces:
+    storage:
+      backend: pv
+      size: 10Gi
+      retention: 48h
+    sampleRatio: "1.0"
+  collectorReplicas: 2
