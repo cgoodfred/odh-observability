@@ -63,6 +63,9 @@ const (
 	// ConditionWebhookAvailable indicates the webhook infrastructure (Service,
 	// cert-manager Issuer/Certificate, MutatingWebhookConfiguration) is deployed.
 	ConditionWebhookAvailable = "WebhookAvailable"
+
+	// ConditionLogsCollectorAvailable indicates the logs OpenTelemetry collector is deployed.
+	ConditionLogsCollectorAvailable = "LogsCollectorAvailable"
 )
 
 // Reason constants.
@@ -100,6 +103,7 @@ var featureConditionTypes = map[string]bool{
 	ConditionPersesPrometheusDataSourceAvailable: true,
 	ConditionNodeMetricsEndpointAvailable:        true,
 	ConditionWebhookAvailable:                    true,
+	ConditionLogsCollectorAvailable:              true,
 }
 
 // ConditionsManager manages the set of conditions for a Monitoring CR reconcile cycle.

@@ -204,6 +204,7 @@ func (r *MonitoringReconciler) reconcile(ctx context.Context, monitoring *v1alph
 		deployMonitoringStackWithQuerierAndRestrictions,
 		deployTracingStack,
 		deployOpenTelemetryCollector,
+		deployLogsCollector,
 		deployAlerting,
 		deployNodeMetricsEndpoint,
 	} {
