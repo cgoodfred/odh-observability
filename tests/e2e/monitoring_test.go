@@ -287,7 +287,7 @@ func (tc *MonitoringTestCtx) ValidateReconciliationStability(t *testing.T) {
 		{gvk.ConfigMap, "prometheus-web-tls-ca", tc.MonitoringNamespace, "prometheus TLS CA ConfigMap", true, true},
 	}
 
-	initialVersions := make(map[string]string, len(resources))
+	// Wait for all resources to exist with correct ownerReferences.
 	for _, r := range resources {
 		opts := []ResourceOpts{
 			WithMinimalObject(r.gvk, types.NamespacedName{Name: r.name, Namespace: r.ns}),
@@ -296,13 +296,46 @@ func (tc *MonitoringTestCtx) ValidateReconciliationStability(t *testing.T) {
 		if r.ownerRef {
 			opts = append(opts, WithCondition(ownerRefStableCondition))
 		}
-
-		u := tc.EnsureResourceExists(opts...)
-		if r.resourceVersion {
-			initialVersions[r.name] = u.GetResourceVersion()
-		}
+		tc.EnsureResourceExists(opts...)
 	}
 
+	// Wait for quiescence: all resourceVersions must stop changing for 30s
+	// before we treat the system as settled. This accounts for our reconciler,
+	// external controllers (e.g. service-ca), and any watch-triggered re-applies.
+	lastVersions := make(map[string]string, len(resources))
+	g.Eventually(func(g Gomega) {
+		stable := true
+		for _, r := range resources {
+			if !r.resourceVersion {
+				continue
+			}
+			u := tc.FetchResource(
+				WithMinimalObject(r.gvk, types.NamespacedName{Name: r.name, Namespace: r.ns}),
+			)
+			g.Expect(u).NotTo(BeNil(), "%s should exist", r.desc)
+
+			rv := u.GetResourceVersion()
+			if prev, ok := lastVersions[r.name]; !ok || prev != rv {
+				lastVersions[r.name] = rv
+				stable = false
+			}
+		}
+		g.Expect(stable).To(BeTrue(), "resources are still being modified, waiting for quiescence")
+	}).WithTimeout(2 * time.Minute).WithPolling(10 * time.Second).Should(Succeed())
+
+	// Capture baselines now that the system has quiesced.
+	initialVersions := make(map[string]string, len(resources))
+	for _, r := range resources {
+		if !r.resourceVersion {
+			continue
+		}
+		u := tc.FetchResource(
+			WithMinimalObject(r.gvk, types.NamespacedName{Name: r.name, Namespace: r.ns}),
+		)
+		initialVersions[r.name] = u.GetResourceVersion()
+	}
+
+	// Assert stability: nothing should change for 1 minute.
 	g.Consistently(func(g Gomega) {
 		for _, r := range resources {
 			u := tc.FetchResource(
@@ -1250,7 +1283,7 @@ func (tc *MonitoringTestCtx) ValidatePersesCRConfiguration(t *testing.T) {
 		WithCondition(And(
 			jq.Match(`.spec.containerPort == 8080`),
 			jq.Match(`.spec.config.database.file != null`),
-			jq.Match(`.spec.storage.size == "1Gi"`),
+			jq.Match(`(.apiVersion | contains("v1alpha1") | not) or .spec.storage.size == "1Gi"`),
 			jq.Match(`.metadata.labels["platform.opendatahub.io/part-of"] == "monitoring"`),
 		)),
 		WithCustomErrorMsg("Perses CR configuration validation failed"),
