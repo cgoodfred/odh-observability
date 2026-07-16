@@ -35,7 +35,7 @@ rules:
   - apiGroups: ["opentelemetry.io"]
     resources: ["opentelemetrycollectors", "instrumentations"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  # Loki (required to grant logs collector permissions to write to LokiStack)
+  # Loki (required to grant usage logs collector permissions to write to LokiStack)
   - apiGroups: ["loki.grafana.com"]
     resources: ["application"]
     verbs: ["create"]

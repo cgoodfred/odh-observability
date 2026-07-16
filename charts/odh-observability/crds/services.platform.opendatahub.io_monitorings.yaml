@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.20.1
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: monitorings.services.platform.opendatahub.io
 spec:
   group: services.platform.opendatahub.io
@@ -62,16 +62,6 @@ spec:
                 format: int32
                 minimum: 0
                 type: integer
-              logs:
-                description: Logs configures log collection and forwarding to Loki.
-                properties:
-                  endpoint:
-                    description: Endpoint is the Loki OTLP endpoint URL for log forwarding.
-                    pattern: ^https?://[a-zA-Z0-9.-]+(:[0-9]+)?(/.*)?$
-                    type: string
-                required:
-                - endpoint
-                type: object
               managementState:
                 default: Managed
                 description: |-
@@ -208,6 +198,23 @@ spec:
                 required:
                 - storage
                 type: object
+              usageLogs:
+                description: UsageLogs configures usage log collection and forwarding
+                  to Loki.
+                properties:
+                  endpoint:
+                    description: |-
+                      Endpoint is the Loki OTLP endpoint URL for usage log forwarding.
+                      Must use HTTPS for external endpoints, or be an in-cluster service (.svc.cluster.local).
+                    pattern: ^https?://[a-zA-Z0-9.-]+(:[0-9]+)?(/.*)?$
+                    type: string
+                required:
+                - endpoint
+                type: object
+                x-kubernetes-validations:
+                - message: Endpoint must use HTTPS or be a local/in-cluster service
+                  rule: self.endpoint.startsWith('https://') || self.endpoint.startsWith('http://localhost')
+                    || self.endpoint.startsWith('http://127.0.0.1') || self.endpoint.contains('.svc.cluster.local')
             type: object
             x-kubernetes-validations:
             - message: Alerting configuration requires metrics.storage to be configured

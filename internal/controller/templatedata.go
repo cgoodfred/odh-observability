@@ -130,13 +130,13 @@ func buildTemplateData(ctx context.Context, c client.Client, monitoring *v1alpha
 		}
 	}
 
-	templateData["LogsCollectorName"] = "logs-collector"
-	if logs := monitoring.Spec.Logs; logs != nil {
-		templateData["Logs"] = true
-		templateData["LogsEndpoint"] = logs.Endpoint
+	templateData["UsageLogsCollectorName"] = "usage-logs"
+	if usageLogs := monitoring.Spec.UsageLogs; usageLogs != nil {
+		templateData["UsageLogs"] = true
+		templateData["UsageLogsEndpoint"] = usageLogs.Endpoint
 	} else {
-		templateData["Logs"] = false
-		templateData["LogsEndpoint"] = ""
+		templateData["UsageLogs"] = false
+		templateData["UsageLogsEndpoint"] = ""
 	}
 
 	// Apply SNO-aware defaulting when CollectorReplicas is unset.

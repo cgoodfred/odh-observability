@@ -69,8 +69,8 @@ const (
 	WebhookServiceTemplate                        = "resources/webhook-service.tmpl.yaml"
 	WebhookCertManagerTemplate                    = "resources/webhook-cert-manager.tmpl.yaml"
 	WebhookConfigurationTemplate                  = "resources/webhook-configuration.tmpl.yaml"
-	LogsOpenTelemetryCollectorTemplate            = "resources/logs-opentelemetry-collector.tmpl.yaml"
-	LogsOpenTelemetryCollectorRBACTemplate        = "resources/logs-opentelemetry-collector-rbac.tmpl.yaml"
+	UsageLogsOpenTelemetryCollectorTemplate       = "resources/usage-logs-opentelemetry-collector.tmpl.yaml"
+	UsageLogsOpenTelemetryCollectorRBACTemplate   = "resources/usage-logs-opentelemetry-collector-rbac.tmpl.yaml"
 
 	PersesTempoDatasourceName = "tempo-datasource"
 	PersesTempoDashboardName  = "data-science-tempo-traces"
@@ -455,17 +455,17 @@ func deployNodeMetricsEndpoint(
 	return nil
 }
 
-// deployLogsCollector deploys the logs OpenTelemetry collector when logs are configured.
-func deployLogsCollector(
+// deployUsageLogsCollector deploys the usage logs OpenTelemetry collector when usage logs are configured.
+func deployUsageLogsCollector(
 	ctx context.Context,
 	c client.Client,
 	monitoring *v1alpha1.Monitoring,
 	cm *conditions.ConditionsManager,
 	sources *[]rendertemplate.TemplateSource,
 ) error {
-	if monitoring.Spec.Logs == nil {
-		cm.MarkNotConfigured(conditions.ConditionLogsCollectorAvailable,
-			"LogsNotConfigured", "Logs not configured in Monitoring CR")
+	if monitoring.Spec.UsageLogs == nil {
+		cm.MarkNotConfigured(conditions.ConditionUsageLogsCollectorAvailable,
+			"UsageLogsNotConfigured", "Usage logs not configured in Monitoring CR")
 		return nil
 	}
 
@@ -474,16 +474,16 @@ func deployLogsCollector(
 		return fmt.Errorf("checking OpenTelemetryCollector CRD: %w", err)
 	}
 	if !otcExists {
-		cm.MarkFalse(conditions.ConditionLogsCollectorAvailable,
+		cm.MarkFalse(conditions.ConditionUsageLogsCollectorAvailable,
 			"OpenTelemetryCollectorCRDNotFound",
 			"OpenTelemetryCollector CRD not found")
 		return nil
 	}
 
-	cm.MarkTrue(conditions.ConditionLogsCollectorAvailable)
+	cm.MarkTrue(conditions.ConditionUsageLogsCollectorAvailable)
 	*sources = append(*sources,
-		src(LogsOpenTelemetryCollectorTemplate),
-		src(LogsOpenTelemetryCollectorRBACTemplate),
+		src(UsageLogsOpenTelemetryCollectorTemplate),
+		src(UsageLogsOpenTelemetryCollectorRBACTemplate),
 	)
 
 	return nil

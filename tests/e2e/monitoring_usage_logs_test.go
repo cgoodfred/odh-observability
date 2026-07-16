@@ -15,39 +15,39 @@ import (
 )
 
 // ========================================================================
-// Group 11: Logs Collection
+// Group 11: Usage Logs Collection
 // ========================================================================
 
-func (tc *MonitoringTestCtx) runLogsCollectionTests(t *testing.T) {
+func (tc *MonitoringTestCtx) runUsageLogsCollectionTests(t *testing.T) {
 	t.Helper()
 
-	t.Run("Group 11: Logs Collection", func(t *testing.T) {
+	t.Run("Group 11: Usage Logs Collection", func(t *testing.T) {
 		t.Cleanup(func() {
 			tc.cleanupGroup(t, "")
 		})
 
-		t.Run("Test Logs Collector not deployed without logs config", tc.ValidateLogsCollectorNotDeployedWithoutConfig)
-		t.Run("Test Logs Collector deployment with logs config", tc.ValidateLogsCollectorDeployment)
-		t.Run("Test Logs Collector configuration", tc.ValidateLogsCollectorConfiguration)
-		t.Run("Test Logs Collector RBAC configuration", tc.ValidateLogsCollectorRBACConfiguration)
-		t.Run("Test Logs Collector lifecycle", tc.ValidateLogsCollectorLifecycle)
+		t.Run("Test Usage Logs Collector not deployed without usage logs config", tc.ValidateUsageUsageLogsCollectorNotDeployedWithoutConfig)
+		t.Run("Test Usage Logs Collector deployment with usage logs config", tc.ValidateUsageUsageLogsCollectorDeployment)
+		t.Run("Test Usage Logs Collector configuration", tc.ValidateUsageUsageLogsCollectorConfiguration)
+		t.Run("Test Usage Logs Collector RBAC configuration", tc.ValidateUsageUsageLogsCollectorRBACConfiguration)
+		t.Run("Test Usage Logs Collector lifecycle", tc.ValidateUsageUsageLogsCollectorLifecycle)
 	})
 }
 
-// ValidateLogsCollectorNotDeployedWithoutConfig tests that the logs collector is not deployed when logs are not configured.
-func (tc *MonitoringTestCtx) ValidateLogsCollectorNotDeployedWithoutConfig(t *testing.T) {
+// ValidateUsageUsageLogsCollectorNotDeployedWithoutConfig tests that the logs collector is not deployed when logs are not configured.
+func (tc *MonitoringTestCtx) ValidateUsageUsageLogsCollectorNotDeployedWithoutConfig(t *testing.T) {
 	t.Helper()
 	t.Cleanup(tc.resetMonitoringConfigToManaged)
 
 	tc.updateMonitoringConfig(
 		withManagementState(common.Managed),
-		withNoLogs(),
+		withNoUsageLogs(),
 	)
 
 	tc.EnsureResourceExists(
 		WithMinimalObject(gvk.Monitoring, types.NamespacedName{Name: tc.MonitoringCRName}),
 		WithCondition(And(
-			jq.Match(`.spec.logs == null`),
+			jq.Match(`.spec.usageLogs == null`),
 			jq.Match(`.status.conditions[] | select(.type == "%s") | .status == "%s"`, common.ConditionTypeReady, metav1.ConditionTrue),
 		)),
 		WithCustomErrorMsg("Monitoring resource should be created without logs configuration"),
@@ -57,21 +57,21 @@ func (tc *MonitoringTestCtx) ValidateLogsCollectorNotDeployedWithoutConfig(t *te
 		WithMinimalObject(gvk.Monitoring, types.NamespacedName{Name: tc.MonitoringCRName}),
 		WithCondition(jq.Match(
 			`[.status.conditions[] | select(.type=="%s" and .status=="False")] | length==1`,
-			conditions.ConditionLogsCollectorAvailable,
+			conditions.ConditionUsageLogsCollectorAvailable,
 		)),
-		WithCustomErrorMsg("LogsCollectorAvailable condition should be False when logs are not configured"),
+		WithCustomErrorMsg("UsageLogsCollectorAvailable condition should be False when logs are not configured"),
 	)
 
 	tc.EnsureResourceGone(
 		WithMinimalObject(gvk.OpenTelemetryCollector, types.NamespacedName{
-			Name:      LogsCollectorName,
+			Name:      UsageLogsCollectorName,
 			Namespace: tc.MonitoringNamespace,
 		}),
 	)
 }
 
-// ValidateLogsCollectorDeployment tests that the logs collector is deployed and ready when logs are configured.
-func (tc *MonitoringTestCtx) ValidateLogsCollectorDeployment(t *testing.T) {
+// ValidateUsageUsageLogsCollectorDeployment tests that the logs collector is deployed and ready when logs are configured.
+func (tc *MonitoringTestCtx) ValidateUsageUsageLogsCollectorDeployment(t *testing.T) {
 	t.Helper()
 	t.Cleanup(tc.resetMonitoringConfigToManaged)
 
@@ -79,22 +79,22 @@ func (tc *MonitoringTestCtx) ValidateLogsCollectorDeployment(t *testing.T) {
 
 	tc.updateMonitoringConfig(
 		withManagementState(common.Managed),
-		withLogsConfig(lokiEndpoint),
+		withUsageLogsConfig(lokiEndpoint),
 	)
 
 	tc.EnsureResourceExists(
 		WithMinimalObject(gvk.Monitoring, types.NamespacedName{Name: tc.MonitoringCRName}),
 		WithCondition(And(
-			jq.Match(`.spec.logs.endpoint == "%s"`, lokiEndpoint),
+			jq.Match(`.spec.usageLogs.endpoint == "%s"`, lokiEndpoint),
 			jq.Match(`.status.conditions[] | select(.type == "%s") | .status == "%s"`, common.ConditionTypeReady, metav1.ConditionTrue),
-			jq.Match(`.status.conditions[] | select(.type == "%s") | .status == "%s"`, conditions.ConditionLogsCollectorAvailable, metav1.ConditionTrue),
+			jq.Match(`.status.conditions[] | select(.type == "%s") | .status == "%s"`, conditions.ConditionUsageLogsCollectorAvailable, metav1.ConditionTrue),
 		)),
-		WithCustomErrorMsg("Monitoring resource should be updated with logs configuration and LogsCollector should be available"),
+		WithCustomErrorMsg("Monitoring resource should be updated with logs configuration and UsageLogsCollector should be available"),
 	)
 
 	tc.EnsureResourceExists(
 		WithMinimalObject(gvk.OpenTelemetryCollector, types.NamespacedName{
-			Name:      LogsCollectorName,
+			Name:      UsageLogsCollectorName,
 			Namespace: tc.MonitoringNamespace,
 		}),
 		WithCondition(And(
@@ -107,14 +107,14 @@ func (tc *MonitoringTestCtx) ValidateLogsCollectorDeployment(t *testing.T) {
 
 	tc.EnsureDeploymentReady(
 		WithMinimalObject(gvk.Deployment, types.NamespacedName{
-			Name:      LogsCollectorName + "-collector",
+			Name:      UsageLogsCollectorName + "-collector",
 			Namespace: tc.MonitoringNamespace,
 		}),
 	)
 }
 
-// ValidateLogsCollectorConfiguration validates the logs collector configuration details.
-func (tc *MonitoringTestCtx) ValidateLogsCollectorConfiguration(t *testing.T) {
+// ValidateUsageUsageLogsCollectorConfiguration validates the logs collector configuration details.
+func (tc *MonitoringTestCtx) ValidateUsageUsageLogsCollectorConfiguration(t *testing.T) {
 	t.Helper()
 	t.Cleanup(tc.resetMonitoringConfigToManaged)
 
@@ -122,12 +122,12 @@ func (tc *MonitoringTestCtx) ValidateLogsCollectorConfiguration(t *testing.T) {
 
 	tc.updateMonitoringConfig(
 		withManagementState(common.Managed),
-		withLogsConfig(lokiEndpoint),
+		withUsageLogsConfig(lokiEndpoint),
 	)
 
 	tc.EnsureResourceExists(
 		WithMinimalObject(gvk.OpenTelemetryCollector, types.NamespacedName{
-			Name:      LogsCollectorName,
+			Name:      UsageLogsCollectorName,
 			Namespace: tc.MonitoringNamespace,
 		}),
 		WithCondition(And(
@@ -156,8 +156,8 @@ func (tc *MonitoringTestCtx) ValidateLogsCollectorConfiguration(t *testing.T) {
 	)
 }
 
-// ValidateLogsCollectorRBACConfiguration tests that the logs collector has correct RBAC permissions.
-func (tc *MonitoringTestCtx) ValidateLogsCollectorRBACConfiguration(t *testing.T) {
+// ValidateUsageUsageLogsCollectorRBACConfiguration tests that the logs collector has correct RBAC permissions.
+func (tc *MonitoringTestCtx) ValidateUsageUsageLogsCollectorRBACConfiguration(t *testing.T) {
 	t.Helper()
 	t.Cleanup(tc.resetMonitoringConfigToManaged)
 
@@ -165,12 +165,12 @@ func (tc *MonitoringTestCtx) ValidateLogsCollectorRBACConfiguration(t *testing.T
 
 	tc.updateMonitoringConfig(
 		withManagementState(common.Managed),
-		withLogsConfig(lokiEndpoint),
+		withUsageLogsConfig(lokiEndpoint),
 	)
 
 	tc.EnsureResourceExists(
 		WithMinimalObject(gvk.ServiceAccount, types.NamespacedName{
-			Name:      LogsCollectorServiceAccount,
+			Name:      UsageLogsCollectorServiceAccount,
 			Namespace: tc.MonitoringNamespace,
 		}),
 		WithCustomErrorMsg("ServiceAccount for logs collector should exist"),
@@ -178,7 +178,7 @@ func (tc *MonitoringTestCtx) ValidateLogsCollectorRBACConfiguration(t *testing.T
 
 	tc.EnsureResourceExists(
 		WithMinimalObject(gvk.ClusterRole, types.NamespacedName{
-			Name: LogsCollectorName + "-processor",
+			Name: UsageLogsCollectorName + "-processor",
 		}),
 		WithCondition(And(
 			// k8sattributes processor requires pod/namespace metadata access
@@ -192,11 +192,11 @@ func (tc *MonitoringTestCtx) ValidateLogsCollectorRBACConfiguration(t *testing.T
 
 	tc.EnsureResourceExists(
 		WithMinimalObject(gvk.ClusterRoleBinding, types.NamespacedName{
-			Name: LogsCollectorName + "-processor",
+			Name: UsageLogsCollectorName + "-processor",
 		}),
 		WithCondition(And(
-			jq.Match(`.roleRef.name == "%s"`, LogsCollectorName+"-processor"),
-			jq.Match(`.subjects[0].name == "%s"`, LogsCollectorServiceAccount),
+			jq.Match(`.roleRef.name == "%s"`, UsageLogsCollectorName+"-processor"),
+			jq.Match(`.subjects[0].name == "%s"`, UsageLogsCollectorServiceAccount),
 			jq.Match(`.subjects[0].namespace == "%s"`, tc.MonitoringNamespace),
 		)),
 		WithCustomErrorMsg("ClusterRoleBinding should bind logs collector ClusterRole to ServiceAccount"),
@@ -204,19 +204,19 @@ func (tc *MonitoringTestCtx) ValidateLogsCollectorRBACConfiguration(t *testing.T
 
 	tc.EnsureResourceExists(
 		WithMinimalObject(gvk.ClusterRoleBinding, types.NamespacedName{
-			Name: LogsCollectorName + "-loki-writer",
+			Name: UsageLogsCollectorName + "-loki-writer",
 		}),
 		WithCondition(And(
 			jq.Match(`.roleRef.name == "lokistack-application-logs-writer"`),
-			jq.Match(`.subjects[0].name == "%s"`, LogsCollectorServiceAccount),
+			jq.Match(`.subjects[0].name == "%s"`, UsageLogsCollectorServiceAccount),
 			jq.Match(`.subjects[0].namespace == "%s"`, tc.MonitoringNamespace),
 		)),
 		WithCustomErrorMsg("ClusterRoleBinding should bind lokistack-application-logs-writer role to logs collector ServiceAccount"),
 	)
 }
 
-// ValidateLogsCollectorLifecycle tests the complete lifecycle of logs collector deployment and cleanup.
-func (tc *MonitoringTestCtx) ValidateLogsCollectorLifecycle(t *testing.T) {
+// ValidateUsageUsageLogsCollectorLifecycle tests the complete lifecycle of logs collector deployment and cleanup.
+func (tc *MonitoringTestCtx) ValidateUsageUsageLogsCollectorLifecycle(t *testing.T) {
 	t.Helper()
 	t.Cleanup(tc.resetMonitoringConfigToManaged)
 
@@ -225,12 +225,12 @@ func (tc *MonitoringTestCtx) ValidateLogsCollectorLifecycle(t *testing.T) {
 	// Step 1: Enable logs
 	tc.updateMonitoringConfig(
 		withManagementState(common.Managed),
-		withLogsConfig(lokiEndpoint),
+		withUsageLogsConfig(lokiEndpoint),
 	)
 
 	tc.EnsureResourceExists(
 		WithMinimalObject(gvk.OpenTelemetryCollector, types.NamespacedName{
-			Name:      LogsCollectorName,
+			Name:      UsageLogsCollectorName,
 			Namespace: tc.MonitoringNamespace,
 		}),
 		WithCondition(jq.Match(`.spec.config.exporters."otlphttp/loki" != null`)),
@@ -240,12 +240,12 @@ func (tc *MonitoringTestCtx) ValidateLogsCollectorLifecycle(t *testing.T) {
 	// Step 2: Disable logs
 	tc.updateMonitoringConfig(
 		withManagementState(common.Managed),
-		withNoLogs(),
+		withNoUsageLogs(),
 	)
 
 	tc.EnsureResourceGone(
 		WithMinimalObject(gvk.OpenTelemetryCollector, types.NamespacedName{
-			Name:      LogsCollectorName,
+			Name:      UsageLogsCollectorName,
 			Namespace: tc.MonitoringNamespace,
 		}),
 	)
@@ -253,20 +253,20 @@ func (tc *MonitoringTestCtx) ValidateLogsCollectorLifecycle(t *testing.T) {
 	tc.EnsureResourceExists(
 		WithMinimalObject(gvk.Monitoring, types.NamespacedName{Name: tc.MonitoringCRName}),
 		WithCondition(
-			jq.Match(`.status.conditions[] | select(.type == "%s") | .status == "%s"`, conditions.ConditionLogsCollectorAvailable, metav1.ConditionFalse),
+			jq.Match(`.status.conditions[] | select(.type == "%s") | .status == "%s"`, conditions.ConditionUsageLogsCollectorAvailable, metav1.ConditionFalse),
 		),
-		WithCustomErrorMsg("LogsCollectorAvailable condition should be False when logs are disabled"),
+		WithCustomErrorMsg("UsageLogsCollectorAvailable condition should be False when logs are disabled"),
 	)
 
 	// Step 3: Re-enable logs
 	tc.updateMonitoringConfig(
 		withManagementState(common.Managed),
-		withLogsConfig(lokiEndpoint),
+		withUsageLogsConfig(lokiEndpoint),
 	)
 
 	tc.EnsureResourceExists(
 		WithMinimalObject(gvk.OpenTelemetryCollector, types.NamespacedName{
-			Name:      LogsCollectorName,
+			Name:      UsageLogsCollectorName,
 			Namespace: tc.MonitoringNamespace,
 		}),
 		WithCondition(jq.Match(`.spec.config.exporters."otlphttp/loki" != null`)),

@@ -34,8 +34,8 @@ const (
 	PersesDatasourceName              = "data-science-prometheus-datasource"
 	ClusterPrometheusDatasourceName   = "cluster-prometheus-datasource"
 	ClusterPrometheusDatasourceSecret = "cluster-prometheus-datasource-secret"
-	LogsCollectorName                 = "logs-collector"
-	LogsCollectorServiceAccount       = "logs-collector-collector"
+	UsageLogsCollectorName            = "usage-logs"
+	UsageLogsCollectorServiceAccount  = "usage-logs-collector"
 )
 
 // OLM operator constants for dependent operators.
@@ -140,12 +140,12 @@ func (tc *MonitoringTestCtx) setupTraces(t *testing.T, backend, secretName strin
 	)
 }
 
-// setupLogs enables logs configuration with the specified Loki endpoint.
-func (tc *MonitoringTestCtx) setupLogs(t *testing.T, lokiEndpoint string) {
+// setupUsageLogs enables usage logs configuration with the specified Loki endpoint.
+func (tc *MonitoringTestCtx) setupUsageLogs(t *testing.T, lokiEndpoint string) {
 	t.Helper()
 	tc.updateMonitoringConfig(
 		withManagementState(common.Managed),
-		withLogsConfig(lokiEndpoint),
+		withUsageLogsConfig(lokiEndpoint),
 	)
 }
 
@@ -191,7 +191,7 @@ func (tc *MonitoringTestCtx) cleanupGroup(t *testing.T, secretName string) {
 func (tc *MonitoringTestCtx) resetMonitoringConfigToManaged() {
 	tc.updateMonitoringConfig(
 		withManagementState(common.Managed),
-		jq.Transform(`del(.spec.metrics, .spec.traces, .spec.alerting, .spec.collectorReplicas)`),
+		jq.Transform(`del(.spec.metrics, .spec.traces, .spec.alerting, .spec.collectorReplicas, .spec.usageLogs)`),
 	)
 
 	tc.EnsureResourcesGone(
@@ -222,7 +222,7 @@ func (tc *MonitoringTestCtx) resetMonitoringConfigToRemoved() {
 		WithMutateFunc(func(u *unstructured.Unstructured) error {
 			return jq.TransformPipeline(
 				withManagementState(common.Removed),
-				jq.Transform(`del(.spec.metrics, .spec.traces, .spec.alerting, .spec.collectorReplicas)`),
+				jq.Transform(`del(.spec.metrics, .spec.traces, .spec.alerting, .spec.collectorReplicas, .spec.usageLogs)`),
 			)(u)
 		}),
 		WithCondition(jq.Match(`.status.phase == "%s"`, common.PhaseNotReady)),
@@ -449,12 +449,12 @@ func withNoTraces() jq.TransformFn {
 	return jq.Transform(`del(.spec.traces)`)
 }
 
-func withNoLogs() jq.TransformFn {
-	return jq.Transform(`del(.spec.logs)`)
+func withNoUsageLogs() jq.TransformFn {
+	return jq.Transform(`del(.spec.usageLogs)`)
 }
 
-func withLogsConfig(endpoint string) jq.TransformFn {
-	return jq.Transform(`.spec.logs.endpoint = "%s"`, endpoint)
+func withUsageLogsConfig(endpoint string) jq.TransformFn {
+	return jq.Transform(`.spec.usageLogs.endpoint = "%s"`, endpoint)
 }
 
 func withNoCollectorReplicas() jq.TransformFn {

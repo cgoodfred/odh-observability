@@ -2,13 +2,13 @@
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: {{.LogsCollectorName}}-collector
+  name: {{.UsageLogsCollectorName}}-collector
   namespace: {{.Namespace}}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{.LogsCollectorName}}-processor
+  name: {{.UsageLogsCollectorName}}-processor
 rules:
   # Required for k8sattributes processor
   - apiGroups: [""]
@@ -30,25 +30,25 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{.LogsCollectorName}}-processor
+  name: {{.UsageLogsCollectorName}}-processor
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: {{.LogsCollectorName}}-processor
+  name: {{.UsageLogsCollectorName}}-processor
 subjects:
   - kind: ServiceAccount
-    name: {{.LogsCollectorName}}-collector
+    name: {{.UsageLogsCollectorName}}-collector
     namespace: {{.Namespace}}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{.LogsCollectorName}}-loki-writer
+  name: {{.UsageLogsCollectorName}}-loki-writer
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: lokistack-application-logs-writer
 subjects:
   - kind: ServiceAccount
-    name: {{.LogsCollectorName}}-collector
+    name: {{.UsageLogsCollectorName}}-collector
     namespace: {{.Namespace}}

@@ -24,7 +24,7 @@ func (tc *MonitoringTestCtx) runNegativeConditionTests(t *testing.T) {
 		t.Run("Perses negative conditions", tc.ValidateMonitoringPersesNegativeConditions)
 		t.Run("NodeMetrics negative conditions", tc.ValidateMonitoringNodeMetricsNegativeConditions)
 		t.Run("OpenTelemetry negative conditions", tc.ValidateMonitoringOpenTelemetryNegativeConditions)
-		t.Run("Logs negative conditions", tc.ValidateMonitoringLogsNegativeConditions)
+		t.Run("Usage Logs negative conditions", tc.ValidateMonitoringUsageLogsNegativeConditions)
 	})
 }
 
@@ -156,21 +156,21 @@ func (tc *MonitoringTestCtx) ValidateMonitoringOpenTelemetryNegativeConditions(t
 	)
 }
 
-func (tc *MonitoringTestCtx) ValidateMonitoringLogsNegativeConditions(t *testing.T) {
+func (tc *MonitoringTestCtx) ValidateMonitoringUsageLogsNegativeConditions(t *testing.T) {
 	t.Helper()
 	t.Cleanup(tc.resetMonitoringConfigToManaged)
 
 	tc.updateMonitoringConfig(
 		withManagementState(common.Managed),
-		withNoLogs(),
+		withNoUsageLogs(),
 	)
 
 	tc.EnsureResourceExists(
 		WithMinimalObject(gvk.Monitoring, types.NamespacedName{Name: tc.MonitoringCRName}),
 		WithCondition(And(
-			jq.Match(`[.status.conditions[] | select(.type=="%s" and .status=="False" and .reason=="LogsNotConfigured")] | length==1`,
-				conditions.ConditionLogsCollectorAvailable),
+			jq.Match(`[.status.conditions[] | select(.type=="%s" and .status=="False" and .reason=="UsageLogsNotConfigured")] | length==1`,
+				conditions.ConditionUsageLogsCollectorAvailable),
 		)),
-		WithCustomErrorMsg("LogsCollector should report LogsNotConfigured when logs are disabled"),
+		WithCustomErrorMsg("UsageLogsCollector should report UsageLogsNotConfigured when usage logs are disabled"),
 	)
 }

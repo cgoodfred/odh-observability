@@ -287,6 +287,6 @@ var (
 
 	// Convenience aliases matching the latest API version.
 
-	Perses          = PersesV1Alpha2
+	Perses           = PersesV1Alpha2
 	PersesDatasource = PersesDatasourceV1Alpha2
 )
