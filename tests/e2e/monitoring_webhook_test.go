@@ -9,9 +9,9 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 
-	common "github.com/opendatahub-io/odh-platform-utilities/api/common"
 	"github.com/opendatahub-io/odh-observability/internal/controller/gvk"
 	jq "github.com/opendatahub-io/odh-observability/tests/e2e/matchers/jq"
+	common "github.com/opendatahub-io/odh-platform-utilities/api/common"
 
 	. "github.com/onsi/gomega"
 )

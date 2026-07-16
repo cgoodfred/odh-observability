@@ -6,10 +6,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
-	common "github.com/opendatahub-io/odh-platform-utilities/api/common"
 	"github.com/opendatahub-io/odh-observability/internal/controller/conditions"
 	"github.com/opendatahub-io/odh-observability/internal/controller/gvk"
 	jq "github.com/opendatahub-io/odh-observability/tests/e2e/matchers/jq"
+	common "github.com/opendatahub-io/odh-platform-utilities/api/common"
 
 	. "github.com/onsi/gomega"
 )
@@ -24,6 +24,7 @@ func (tc *MonitoringTestCtx) runNegativeConditionTests(t *testing.T) {
 		t.Run("Perses negative conditions", tc.ValidateMonitoringPersesNegativeConditions)
 		t.Run("NodeMetrics negative conditions", tc.ValidateMonitoringNodeMetricsNegativeConditions)
 		t.Run("OpenTelemetry negative conditions", tc.ValidateMonitoringOpenTelemetryNegativeConditions)
+		t.Run("Logs negative conditions", tc.ValidateMonitoringLogsNegativeConditions)
 	})
 }
 
@@ -152,5 +153,24 @@ func (tc *MonitoringTestCtx) ValidateMonitoringOpenTelemetryNegativeConditions(t
 				conditions.ConditionOpenTelemetryCollectorAvailable, conditions.MetricsAndTracesNotConfiguredReason),
 		)),
 		WithCustomErrorMsg("OpenTelemetryCollector should report MetricsAndTracesNotConfigured when both are disabled"),
+	)
+}
+
+func (tc *MonitoringTestCtx) ValidateMonitoringLogsNegativeConditions(t *testing.T) {
+	t.Helper()
+	t.Cleanup(tc.resetMonitoringConfigToManaged)
+
+	tc.updateMonitoringConfig(
+		withManagementState(common.Managed),
+		withNoLogs(),
+	)
+
+	tc.EnsureResourceExists(
+		WithMinimalObject(gvk.Monitoring, types.NamespacedName{Name: tc.MonitoringCRName}),
+		WithCondition(And(
+			jq.Match(`[.status.conditions[] | select(.type=="%s" and .status=="False" and .reason=="LogsNotConfigured")] | length==1`,
+				conditions.ConditionLogsCollectorAvailable),
+		)),
+		WithCustomErrorMsg("LogsCollector should report LogsNotConfigured when logs are disabled"),
 	)
 }

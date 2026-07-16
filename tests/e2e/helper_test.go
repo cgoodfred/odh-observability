@@ -11,9 +11,9 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 
-	common "github.com/opendatahub-io/odh-platform-utilities/api/common"
 	"github.com/opendatahub-io/odh-observability/internal/controller/gvk"
 	jq "github.com/opendatahub-io/odh-observability/tests/e2e/matchers/jq"
+	common "github.com/opendatahub-io/odh-platform-utilities/api/common"
 
 	. "github.com/onsi/gomega"
 )
@@ -34,6 +34,8 @@ const (
 	PersesDatasourceName              = "data-science-prometheus-datasource"
 	ClusterPrometheusDatasourceName   = "cluster-prometheus-datasource"
 	ClusterPrometheusDatasourceSecret = "cluster-prometheus-datasource-secret"
+	LogsCollectorName                 = "logs-collector"
+	LogsCollectorServiceAccount       = "logs-collector-collector"
 )
 
 // OLM operator constants for dependent operators.
@@ -68,7 +70,6 @@ const (
 	TracesStorageBackendGCS = "gcs"
 	TracesStorageSize1Gi    = "1Gi"
 )
-
 
 // monitoringOwnerReferencesCondition validates owner references point to the Monitoring CR.
 var monitoringOwnerReferencesCondition = And(
@@ -136,6 +137,15 @@ func (tc *MonitoringTestCtx) setupTraces(t *testing.T, backend, secretName strin
 	tc.updateMonitoringConfig(
 		withManagementState(common.Managed),
 		withMonitoringTraces(backend, secretName, size, DefaultRetention),
+	)
+}
+
+// setupLogs enables logs configuration with the specified Loki endpoint.
+func (tc *MonitoringTestCtx) setupLogs(t *testing.T, lokiEndpoint string) {
+	t.Helper()
+	tc.updateMonitoringConfig(
+		withManagementState(common.Managed),
+		withLogsConfig(lokiEndpoint),
 	)
 }
 
@@ -437,6 +447,14 @@ func withNoAlerting() jq.TransformFn {
 
 func withNoTraces() jq.TransformFn {
 	return jq.Transform(`del(.spec.traces)`)
+}
+
+func withNoLogs() jq.TransformFn {
+	return jq.Transform(`del(.spec.logs)`)
+}
+
+func withLogsConfig(endpoint string) jq.TransformFn {
+	return jq.Transform(`.spec.logs.endpoint = "%s"`, endpoint)
 }
 
 func withNoCollectorReplicas() jq.TransformFn {
