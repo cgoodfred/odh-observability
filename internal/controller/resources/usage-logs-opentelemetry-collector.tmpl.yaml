@@ -7,7 +7,7 @@ metadata:
     app.kubernetes.io/part-of: data-science-observability
 spec:
   mode: deployment
-  replicas: 2
+  replicas: {{.CollectorReplicas}}  
   resources:
     limits:
       cpu: {{.CollectorCPULimit}}
@@ -71,7 +71,7 @@ spec:
         endpoint: {{.UsageLogsEndpoint}}
         tls:
           ca_file: /var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt
-          insecure_skip_verify: true
+          insecure_skip_verify: false
         auth:
           authenticator: bearertokenauth
         headers:

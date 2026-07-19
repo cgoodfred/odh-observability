@@ -140,8 +140,10 @@ type TracesStorage struct {
 }
 
 // UsageLogs defines the configuration for usage log collection.
+// +kubebuilder:validation:XValidation:rule="self.endpoint.startsWith('https://') || self.endpoint.startsWith('http://localhost') || self.endpoint.startsWith('http://127.0.0.1') || self.endpoint.contains('.svc.cluster.local')",message="Endpoint must use HTTPS or be a local/in-cluster service"
 type UsageLogs struct {
 	// Endpoint is the Loki OTLP endpoint URL for usage log forwarding.
+	// Must use HTTPS for external endpoints, or be an in-cluster service (.svc.cluster.local).
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Pattern=`^https?://[a-zA-Z0-9.-]+(:[0-9]+)?(/.*)?$`
 	Endpoint string `json:"endpoint"`
