@@ -140,13 +140,29 @@ type TracesStorage struct {
 }
 
 // UsageLogs defines the configuration for usage log collection.
-// +kubebuilder:validation:XValidation:rule="self.endpoint.startsWith('https://') || self.endpoint.startsWith('http://localhost') || self.endpoint.startsWith('http://127.0.0.1') || self.endpoint.contains('.svc.cluster.local')",message="Endpoint must use HTTPS or be a local/in-cluster service"
 type UsageLogs struct {
-	// Endpoint is the Loki OTLP endpoint URL for usage log forwarding.
-	// Must use HTTPS for external endpoints, or be an in-cluster service (.svc.cluster.local).
+	// Storage configures the LokiStack storage backend (S3).
+	// When configured, the operator deploys a LokiStack instance and auto-configures the collector endpoint.
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:Pattern=`^https?://[a-zA-Z0-9.-]+(:[0-9]+)?(/.*)?$`
-	Endpoint string `json:"endpoint"`
+	Storage *LokiStorageConfig `json:"storage"`
+}
+
+// LokiStorageConfig defines storage configuration for LokiStack.
+type LokiStorageConfig struct {
+	// Type specifies the storage backend: "s3".
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Enum=s3
+	Type string `json:"type"`
+
+	// SecretName is the name of the Secret containing storage credentials.
+	// For S3: must contain keys: access_key_id, access_key_secret, bucketnames, endpoint, region, insecure, s3ForcePathStyle
+	// +kubebuilder:validation:Required
+	SecretName string `json:"secretName"`
+
+	// StorageClassName specifies the storage class for LokiStack PVCs.
+	// +optional
+	// +kubebuilder:default="gp3-csi"
+	StorageClassName string `json:"storageClassName,omitempty"`
 }
 
 // Alerting configures Prometheus alerting rules.
@@ -161,6 +177,11 @@ type MonitoringStatus struct {
 
 	// URL is the dashboard endpoint when available.
 	URL string `json:"url,omitempty"`
+
+	// UsageLogsEndpoint is the Loki OTLP endpoint for sending usage logs.
+	// Populated when usageLogs is configured.
+	// +optional
+	UsageLogsEndpoint string `json:"usageLogsEndpoint,omitempty"`
 }
 
 //+kubebuilder:object:root=true
