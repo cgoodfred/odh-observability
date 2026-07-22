@@ -157,11 +157,21 @@ type LokiStorageConfig struct {
 	// SecretName is the name of the Secret containing storage credentials.
 	// For S3: must contain keys: access_key_id, access_key_secret, bucketnames, endpoint, region, insecure, s3ForcePathStyle
 	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
+	// +kubebuilder:validation:MaxLength=253
 	SecretName string `json:"secretName"`
+
+	// CredentialMode specifies how credentials are provided to LokiStack.
+	// Valid values: "static", "token", "token-cco".
+	// +optional
+	// +kubebuilder:default="static"
+	// +kubebuilder:validation:Enum=static;token;token-cco
+	CredentialMode string `json:"credentialMode,omitempty"`
 
 	// StorageClassName specifies the storage class for LokiStack PVCs.
 	// +optional
 	// +kubebuilder:default="gp3-csi"
+	// +kubebuilder:validation:MaxLength=253
 	StorageClassName string `json:"storageClassName,omitempty"`
 }
 

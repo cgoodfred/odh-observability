@@ -95,6 +95,7 @@ func (tc *MonitoringTestCtx) ValidateUsageUsageLogsCollectorDeployment(t *testin
 		WithCondition(And(
 			jq.Match(`.spec.usageLogs.storage.type == "s3"`),
 			jq.Match(`.spec.usageLogs.storage.secretName == "%s"`, secretName),
+			jq.Match(`.spec.usageLogs.storage.credentialMode == "static"`),
 			jq.Match(`.status.conditions[] | select(.type == "%s") | .status == "%s"`, common.ConditionTypeReady, metav1.ConditionTrue),
 			jq.Match(`.status.conditions[] | select(.type == "%s") | .status == "%s"`, conditions.ConditionUsageLogsCollectorAvailable, metav1.ConditionTrue),
 			jq.Match(`.status.conditions[] | select(.type == "%s") | .status == "%s"`, conditions.ConditionLokiStackAvailable, metav1.ConditionTrue),
@@ -320,6 +321,7 @@ func (tc *MonitoringTestCtx) ValidateUsageLogsLokiStackDeployment(t *testing.T) 
 			jq.Match(`.spec.size == "1x.extra-small"`),
 			jq.Match(`.spec.storage.secret.name == "%s"`, secretName),
 			jq.Match(`.spec.storage.secret.type == "s3"`),
+			jq.Match(`.spec.storage.secret.credentialMode == "static"`),
 			jq.Match(`.spec.storageClassName == "gp3-csi"`),
 			jq.Match(`.spec.tenants.mode == "openshift-logging"`),
 		)),

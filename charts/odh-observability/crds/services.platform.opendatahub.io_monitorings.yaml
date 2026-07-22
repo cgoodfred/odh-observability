@@ -207,15 +207,28 @@ spec:
                       Storage configures the LokiStack storage backend (S3).
                       When configured, the operator deploys a LokiStack instance and auto-configures the collector endpoint.
                     properties:
+                      credentialMode:
+                        default: static
+                        description: |-
+                          CredentialMode specifies how credentials are provided to LokiStack.
+                          Valid values: "static", "token", "token-cco".
+                        enum:
+                        - static
+                        - token
+                        - token-cco
+                        type: string
                       secretName:
                         description: |-
                           SecretName is the name of the Secret containing storage credentials.
                           For S3: must contain keys: access_key_id, access_key_secret, bucketnames, endpoint, region, insecure, s3ForcePathStyle
+                        maxLength: 253
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
                         type: string
                       storageClassName:
                         default: gp3-csi
                         description: StorageClassName specifies the storage class
                           for LokiStack PVCs.
+                        maxLength: 253
                         type: string
                       type:
                         description: 'Type specifies the storage backend: "s3".'

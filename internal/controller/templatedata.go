@@ -136,11 +136,11 @@ func buildTemplateData(ctx context.Context, c client.Client, monitoring *v1alpha
 
 	templateData["UsageLogsCollectorName"] = "usage-logs"
 	if usageLogs := monitoring.Spec.UsageLogs; usageLogs != nil && usageLogs.Storage != nil {
-		templateData["LokiStorageCredentialMode"] = "static"
+		templateData["LokiStorageCredentialMode"] = usageLogs.Storage.CredentialMode
 		templateData["LokiStorageSecretName"] = usageLogs.Storage.SecretName
 		templateData["LokiStorageType"] = usageLogs.Storage.Type
 
-		// Default to gp3-csi if not specified
+		// Default to gp3-csi if explicitly set to "" -> otherwise it would add an extra required manual created PV with "" storageclass
 		storageClassName := usageLogs.Storage.StorageClassName
 		if storageClassName == "" {
 			storageClassName = "gp3-csi"

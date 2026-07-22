@@ -474,6 +474,29 @@ func withUsageLogsStorage(storageType, secretName, storageClassName string) jq.T
 	return jq.Transform(`.spec.usageLogs.storage = {"type": "%s", "secretName": "%s", "storageClassName": "%s"}`, storageType, secretName, storageClassName)
 }
 
+func withUsageLogsStorageAndCredentialMode(storageType, secretName, storageClassName, credentialMode string) jq.TransformFn {
+	base := map[string]interface{}{
+		"type":       storageType,
+		"secretName": secretName,
+	}
+	if storageClassName != "" {
+		base["storageClassName"] = storageClassName
+	}
+	if credentialMode != "" {
+		base["credentialMode"] = credentialMode
+	}
+
+	// Build the JSON string manually
+	if storageClassName == "" && credentialMode == "" {
+		return jq.Transform(`.spec.usageLogs.storage = {"type": "%s", "secretName": "%s"}`, storageType, secretName)
+	} else if storageClassName != "" && credentialMode == "" {
+		return jq.Transform(`.spec.usageLogs.storage = {"type": "%s", "secretName": "%s", "storageClassName": "%s"}`, storageType, secretName, storageClassName)
+	} else if storageClassName == "" && credentialMode != "" {
+		return jq.Transform(`.spec.usageLogs.storage = {"type": "%s", "secretName": "%s", "credentialMode": "%s"}`, storageType, secretName, credentialMode)
+	}
+	return jq.Transform(`.spec.usageLogs.storage = {"type": "%s", "secretName": "%s", "storageClassName": "%s", "credentialMode": "%s"}`, storageType, secretName, storageClassName, credentialMode)
+}
+
 func withLokiS3Storage(secretName string) jq.TransformFn {
 	return withUsageLogsStorage("s3", secretName, "")
 }
