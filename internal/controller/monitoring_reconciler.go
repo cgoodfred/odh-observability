@@ -259,18 +259,8 @@ func (r *MonitoringReconciler) reconcile(ctx context.Context, monitoring *v1alph
 		log.Error(err, "Failed to sync status URL")
 	}
 
-	// Update usageLogsEndpoint in status if LokiStack is deployed
-	if monitoring.Spec.UsageLogs != nil && monitoring.Spec.UsageLogs.Storage != nil {
-		lokiStackName := "data-science-lokistack"
-		namespace := monitoring.Spec.Namespace
-		if namespace == "" {
-			namespace = "opendatahub"
-		}
-		gatewayURL := fmt.Sprintf("https://%s-gateway-http.%s.svc.cluster.local:8080/api/logs/v1/application/otlp", lokiStackName, namespace)
-		monitoring.Status.UsageLogsEndpoint = gatewayURL
-	} else {
-		monitoring.Status.UsageLogsEndpoint = ""
-	}
+	// Update usageLogsEndpoint in status from template data
+	monitoring.Status.UsageLogsEndpoint = data["UsageLogsEndpoint"].(string)
 
 	cm.AggregateReady()
 	return ctrl.Result{}, nil
