@@ -36,6 +36,7 @@ const (
 	ClusterPrometheusDatasourceSecret = "cluster-prometheus-datasource-secret"
 	UsageLogsCollectorName            = "usage-logs"
 	UsageLogsCollectorServiceAccount  = "usage-logs-collector"
+	LokiStackName                     = "data-science-lokistack"
 )
 
 // OLM operator constants for dependent operators.
@@ -141,14 +142,6 @@ func (tc *MonitoringTestCtx) setupTraces(t *testing.T, backend, secretName strin
 }
 
 // setupUsageLogs enables usage logs configuration with the specified Loki endpoint.
-func (tc *MonitoringTestCtx) setupUsageLogs(t *testing.T, lokiEndpoint string) {
-	t.Helper()
-	tc.updateMonitoringConfig(
-		withManagementState(common.Managed),
-		withUsageLogsConfig(lokiEndpoint),
-	)
-}
-
 // cleanupGroup performs group-level cleanup, resetting monitoring to a clean state.
 func (tc *MonitoringTestCtx) cleanupGroup(t *testing.T, secretName string) {
 	t.Helper()
@@ -304,6 +297,41 @@ func (tc *MonitoringTestCtx) cleanupTempoStackAndSecret(secretName string) {
 	}
 }
 
+// cleanupLokiStackAndSecret removes LokiStack and optionally an associated secret.
+func (tc *MonitoringTestCtx) cleanupLokiStackAndSecret(secretName string) {
+	tc.DeleteResource(
+		WithMinimalObject(gvk.LokiStack, types.NamespacedName{
+			Name:      LokiStackName,
+			Namespace: tc.MonitoringNamespace,
+		}),
+		WithWaitForDeletion(true),
+		WithRemoveFinalizersOnDelete(true),
+		WithIgnoreNotFound(true),
+		WithEventuallyTimeout(15*time.Minute),
+	)
+
+	if secretName != "" {
+		tc.DeleteResource(
+			WithMinimalObject(gvk.Secret, types.NamespacedName{
+				Name:      secretName,
+				Namespace: tc.MonitoringNamespace,
+			}),
+			WithIgnoreNotFound(true),
+			WithWaitForDeletion(true),
+		)
+	}
+}
+
+// setupUsageLogsWithStorage creates a secret and configures usage logs with storage.
+func (tc *MonitoringTestCtx) setupUsageLogsWithStorage(t *testing.T, storageType, secretName string) {
+	t.Helper()
+	tc.createDummySecret(t, storageType, secretName, tc.MonitoringNamespace)
+	tc.updateMonitoringConfig(
+		withManagementState(common.Managed),
+		withUsageLogsStorage(storageType, secretName, ""),
+	)
+}
+
 // cleanupTracesConfiguration resets traces configuration.
 func (tc *MonitoringTestCtx) cleanupTracesConfiguration() {
 	tc.updateMonitoringConfig(withNoTraces())
@@ -358,25 +386,11 @@ func (tc *MonitoringTestCtx) createDummySecret(t *testing.T, backendType, secret
 			Data: map[string][]byte{
 				"access_key_id":     []byte("fake-access-key"),
 				"access_key_secret": []byte("fake-secret-key"),
-				"bucket":            []byte("fake-bucket"),
-				"endpoint":          []byte("https://s3.amazonaws.com"),
-			},
-		}
-	case "gcs":
-		secret = &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      secretName,
-				Namespace: namespace,
-			},
-			Type: corev1.SecretTypeOpaque,
-			Data: map[string][]byte{
-				"key.json": []byte(`{
-					"type": "service_account",
-					"project_id": "fake-test-project-not-real",
-					"private_key_id": "test-key-id-fake",
-					"private_key": "-----BEGIN PRIVATE KEY-----\nTEST-FAKE-KEY-NOT-REAL\n-----END PRIVATE KEY-----\n",
-					"client_email": "test-fake@fake-project.iam.gserviceaccount.com"
-				}`),
+				"bucketnames":       []byte("fake-bucket"),
+				"endpoint":          []byte("https://s3.us-east-1.amazonaws.com"),
+				"region":            []byte("us-east-1"),
+				"insecure":          []byte("false"),
+				"s3ForcePathStyle":  []byte("false"),
 			},
 		}
 	default:
@@ -453,8 +467,15 @@ func withNoUsageLogs() jq.TransformFn {
 	return jq.Transform(`del(.spec.usageLogs)`)
 }
 
-func withUsageLogsConfig(endpoint string) jq.TransformFn {
-	return jq.Transform(`.spec.usageLogs.endpoint = "%s"`, endpoint)
+func withUsageLogsStorage(storageType, secretName, storageClassName string) jq.TransformFn {
+	if storageClassName == "" {
+		return jq.Transform(`.spec.usageLogs.storage = {"type": "%s", "secretName": "%s"}`, storageType, secretName)
+	}
+	return jq.Transform(`.spec.usageLogs.storage = {"type": "%s", "secretName": "%s", "storageClassName": "%s"}`, storageType, secretName, storageClassName)
+}
+
+func withLokiS3Storage(secretName string) jq.TransformFn {
+	return withUsageLogsStorage("s3", secretName, "")
 }
 
 func withNoCollectorReplicas() jq.TransformFn {
