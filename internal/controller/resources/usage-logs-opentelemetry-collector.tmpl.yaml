@@ -70,7 +70,7 @@ spec:
       otlphttp/loki:
         endpoint: {{.UsageLogsEndpoint}}
         tls:
-          insecure_skip_verify: true
+          ca_file: "/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt"
         auth:
           authenticator: bearertokenauth
         headers:

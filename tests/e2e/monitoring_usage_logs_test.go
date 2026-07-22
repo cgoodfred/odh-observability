@@ -26,19 +26,19 @@ func (tc *MonitoringTestCtx) runUsageLogsCollectionTests(t *testing.T) {
 			tc.cleanupGroup(t, "")
 		})
 
-		t.Run("Test Usage Logs Collector not deployed without usage logs config", tc.ValidateUsageUsageLogsCollectorNotDeployedWithoutConfig)
-		t.Run("Test Usage Logs Collector deployment with usage logs config", tc.ValidateUsageUsageLogsCollectorDeployment)
-		t.Run("Test Usage Logs Collector configuration", tc.ValidateUsageUsageLogsCollectorConfiguration)
-		t.Run("Test Usage Logs Collector RBAC configuration", tc.ValidateUsageUsageLogsCollectorRBACConfiguration)
-		t.Run("Test Usage Logs Collector lifecycle", tc.ValidateUsageUsageLogsCollectorLifecycle)
+		t.Run("Test Usage Logs Collector not deployed without usage logs config", tc.ValidateUsageLogsCollectorNotDeployedWithoutConfig)
+		t.Run("Test Usage Logs Collector deployment with usage logs config", tc.ValidateUsageLogsCollectorDeployment)
+		t.Run("Test Usage Logs Collector configuration", tc.ValidateUsageLogsCollectorConfiguration)
+		t.Run("Test Usage Logs Collector RBAC configuration", tc.ValidateUsageLogsCollectorRBACConfiguration)
+		t.Run("Test Usage Logs Collector lifecycle", tc.ValidateUsageLogsCollectorLifecycle)
 		t.Run("Test Usage Logs LokiStack deployment", tc.ValidateUsageLogsLokiStackDeployment)
 		t.Run("Test Usage Logs LokiStack configuration", tc.ValidateUsageLogsLokiStackConfiguration)
 		t.Run("Test Usage Logs LokiStack lifecycle", tc.ValidateUsageLogsLokiStackLifecycle)
 	})
 }
 
-// ValidateUsageUsageLogsCollectorNotDeployedWithoutConfig tests that the logs collector is not deployed when logs are not configured.
-func (tc *MonitoringTestCtx) ValidateUsageUsageLogsCollectorNotDeployedWithoutConfig(t *testing.T) {
+// ValidateUsageLogsCollectorNotDeployedWithoutConfig tests that the logs collector is not deployed when logs are not configured.
+func (tc *MonitoringTestCtx) ValidateUsageLogsCollectorNotDeployedWithoutConfig(t *testing.T) {
 	t.Helper()
 	t.Cleanup(tc.resetMonitoringConfigToManaged)
 
@@ -80,8 +80,8 @@ func (tc *MonitoringTestCtx) ValidateUsageUsageLogsCollectorNotDeployedWithoutCo
 	)
 }
 
-// ValidateUsageUsageLogsCollectorDeployment tests that the logs collector is deployed and ready when logs are configured.
-func (tc *MonitoringTestCtx) ValidateUsageUsageLogsCollectorDeployment(t *testing.T) {
+// ValidateUsageLogsCollectorDeployment tests that the logs collector is deployed and ready when logs are configured.
+func (tc *MonitoringTestCtx) ValidateUsageLogsCollectorDeployment(t *testing.T) {
 	t.Helper()
 	t.Cleanup(tc.resetMonitoringConfigToManaged)
 
@@ -124,8 +124,8 @@ func (tc *MonitoringTestCtx) ValidateUsageUsageLogsCollectorDeployment(t *testin
 	)
 }
 
-// ValidateUsageUsageLogsCollectorConfiguration validates the logs collector configuration details.
-func (tc *MonitoringTestCtx) ValidateUsageUsageLogsCollectorConfiguration(t *testing.T) {
+// ValidateUsageLogsCollectorConfiguration validates the logs collector configuration details.
+func (tc *MonitoringTestCtx) ValidateUsageLogsCollectorConfiguration(t *testing.T) {
 	t.Helper()
 	t.Cleanup(tc.resetMonitoringConfigToManaged)
 
@@ -152,8 +152,10 @@ func (tc *MonitoringTestCtx) ValidateUsageUsageLogsCollectorConfiguration(t *tes
 
 			// Verify exporter endpoint (auto-generated from LokiStack)
 			jq.Match(`.spec.config.exporters."otlphttp/loki".endpoint | test("https://data-science-lokistack-gateway-http\\..+\\.svc\\.cluster\\.local:8080/api/logs/v1/application/otlp")`),
-			jq.Match(`.spec.config.exporters."otlphttp/loki".tls.insecure_skip_verify == true`),
-			jq.Match(`.spec.config.exporters."otlphttp/loki".auth.authenticator == "bearertokenauth"`),
+			jq.Match(`
+				(.spec.config.exporters."otlphttp/loki".tls.ca_file == "/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt") and
+				(.spec.config.exporters."otlphttp/loki".auth.authenticator == "bearertokenauth")
+			`),
 			jq.Match(`.spec.config.exporters."otlphttp/loki".headers."X-Scope-OrgID" == "application"`),
 
 			// Verify pipeline
@@ -165,8 +167,8 @@ func (tc *MonitoringTestCtx) ValidateUsageUsageLogsCollectorConfiguration(t *tes
 	)
 }
 
-// ValidateUsageUsageLogsCollectorRBACConfiguration tests that the logs collector has correct RBAC permissions.
-func (tc *MonitoringTestCtx) ValidateUsageUsageLogsCollectorRBACConfiguration(t *testing.T) {
+// ValidateUsageLogsCollectorRBACConfiguration tests that the logs collector has correct RBAC permissions.
+func (tc *MonitoringTestCtx) ValidateUsageLogsCollectorRBACConfiguration(t *testing.T) {
 	t.Helper()
 	t.Cleanup(tc.resetMonitoringConfigToManaged)
 
@@ -222,8 +224,8 @@ func (tc *MonitoringTestCtx) ValidateUsageUsageLogsCollectorRBACConfiguration(t 
 	)
 }
 
-// ValidateUsageUsageLogsCollectorLifecycle tests the complete lifecycle of logs collector deployment and cleanup.
-func (tc *MonitoringTestCtx) ValidateUsageUsageLogsCollectorLifecycle(t *testing.T) {
+// ValidateUsageLogsCollectorLifecycle tests the complete lifecycle of logs collector deployment and cleanup.
+func (tc *MonitoringTestCtx) ValidateUsageLogsCollectorLifecycle(t *testing.T) {
 	t.Helper()
 	t.Cleanup(tc.resetMonitoringConfigToManaged)
 

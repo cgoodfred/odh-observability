@@ -141,7 +141,6 @@ func (tc *MonitoringTestCtx) setupTraces(t *testing.T, backend, secretName strin
 	)
 }
 
-// setupUsageLogs enables usage logs configuration with the specified Loki endpoint.
 // cleanupGroup performs group-level cleanup, resetting monitoring to a clean state.
 func (tc *MonitoringTestCtx) cleanupGroup(t *testing.T, secretName string) {
 	t.Helper()
