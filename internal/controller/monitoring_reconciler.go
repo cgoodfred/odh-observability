@@ -205,6 +205,7 @@ func (r *MonitoringReconciler) reconcile(ctx context.Context, monitoring *v1alph
 		deployTracingStack,
 		deployOpenTelemetryCollector,
 		deployUsageLogsCollector,
+		deployLokiStack,
 		deployAlerting,
 		deployNodeMetricsEndpoint,
 	} {
@@ -256,6 +257,19 @@ func (r *MonitoringReconciler) reconcile(ctx context.Context, monitoring *v1alph
 	// Populate status.url from the Thanos Querier route.
 	if err := syncStatusURL(ctx, r.Client, monitoring); err != nil {
 		log.Error(err, "Failed to sync status URL")
+	}
+
+	// Update usageLogsEndpoint in status if LokiStack is deployed
+	if monitoring.Spec.UsageLogs != nil && monitoring.Spec.UsageLogs.Storage != nil {
+		lokiStackName := "data-science-lokistack"
+		namespace := monitoring.Spec.Namespace
+		if namespace == "" {
+			namespace = "opendatahub"
+		}
+		gatewayURL := fmt.Sprintf("https://%s-gateway-http.%s.svc.cluster.local:8080/api/logs/v1/application/otlp", lokiStackName, namespace)
+		monitoring.Status.UsageLogsEndpoint = gatewayURL
+	} else {
+		monitoring.Status.UsageLogsEndpoint = ""
 	}
 
 	cm.AggregateReady()

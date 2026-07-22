@@ -71,6 +71,7 @@ const (
 	WebhookConfigurationTemplate                  = "resources/webhook-configuration.tmpl.yaml"
 	UsageLogsOpenTelemetryCollectorTemplate       = "resources/usage-logs-opentelemetry-collector.tmpl.yaml"
 	UsageLogsOpenTelemetryCollectorRBACTemplate   = "resources/usage-logs-opentelemetry-collector-rbac.tmpl.yaml"
+	LokiStackTemplate                             = "resources/loki-stack.tmpl.yaml"
 
 	PersesTempoDatasourceName = "tempo-datasource"
 	PersesTempoDashboardName  = "data-science-tempo-traces"
@@ -486,6 +487,36 @@ func deployUsageLogsCollector(
 		src(UsageLogsOpenTelemetryCollectorRBACTemplate),
 	)
 
+	return nil
+}
+
+// deployLokiStack deploys LokiStack when usage logs storage is configured.
+func deployLokiStack(
+	ctx context.Context,
+	c client.Client,
+	monitoring *v1alpha1.Monitoring,
+	cm *conditions.ConditionsManager,
+	sources *[]rendertemplate.TemplateSource,
+) error {
+	if monitoring.Spec.UsageLogs == nil || monitoring.Spec.UsageLogs.Storage == nil {
+		cm.MarkNotConfigured(conditions.ConditionLokiStackAvailable,
+			"UsageLogsStorageNotConfigured", "Usage logs storage not configured in Monitoring CR")
+		return nil
+	}
+
+	lokiExists, err := hasCRD(ctx, c, gvk.LokiStack)
+	if err != nil {
+		return fmt.Errorf("checking LokiStack CRD: %w", err)
+	}
+	if !lokiExists {
+		cm.MarkFalse(conditions.ConditionLokiStackAvailable,
+			conditions.MissingOperatorReason,
+			"LokiStack operator must be installed for usage logs storage configuration")
+		return nil
+	}
+
+	cm.MarkTrue(conditions.ConditionLokiStackAvailable)
+	*sources = append(*sources, src(LokiStackTemplate))
 	return nil
 }
 

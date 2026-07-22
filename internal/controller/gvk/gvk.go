@@ -71,6 +71,13 @@ var (
 		Kind:    "Instrumentation",
 	}
 
+	// LokiStack (loki.grafana.com/v1).
+	LokiStack = schema.GroupVersionKind{
+		Group:   "loki.grafana.com",
+		Version: "v1",
+		Kind:    "LokiStack",
+	}
+
 	// ServiceMonitor (monitoring.rhobs/v1) for RHOBS stack.
 	ServiceMonitor = schema.GroupVersionKind{
 		Group:   "monitoring.rhobs",

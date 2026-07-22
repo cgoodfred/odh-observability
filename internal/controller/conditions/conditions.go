@@ -66,6 +66,9 @@ const (
 
 	// ConditionUsageLogsCollectorAvailable indicates the usage logs OpenTelemetry collector is deployed.
 	ConditionUsageLogsCollectorAvailable = "UsageLogsCollectorAvailable"
+
+	// ConditionLokiStackAvailable indicates the LokiStack CR is deployed.
+	ConditionLokiStackAvailable = "LokiStackAvailable"
 )
 
 // Reason constants.
@@ -104,6 +107,7 @@ var featureConditionTypes = map[string]bool{
 	ConditionNodeMetricsEndpointAvailable:        true,
 	ConditionWebhookAvailable:                    true,
 	ConditionUsageLogsCollectorAvailable:         true,
+	ConditionLokiStackAvailable:                  true,
 }
 
 // ConditionsManager manages the set of conditions for a Monitoring CR reconcile cycle.
