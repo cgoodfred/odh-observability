@@ -350,7 +350,7 @@ func (tc *MonitoringTestCtx) ValidateUsageLogsLokiStackConfiguration(t *testing.
 	t.Cleanup(func() { tc.cleanupLokiStackAndSecret(secretName) })
 
 	// Test with S3 and custom storage class
-	tc.createDummySecret(t, "s3", secretName, tc.MonitoringNamespace)
+	tc.createLokiS3Secret(t, secretName, tc.MonitoringNamespace)
 	tc.updateMonitoringConfig(
 		withManagementState(common.Managed),
 		withUsageLogsStorage("s3", secretName, storageClassName),

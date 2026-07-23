@@ -324,7 +324,7 @@ func (tc *MonitoringTestCtx) cleanupLokiStackAndSecret(secretName string) {
 // setupUsageLogsWithStorage creates a secret and configures usage logs with storage.
 func (tc *MonitoringTestCtx) setupUsageLogsWithStorage(t *testing.T, storageType, secretName string) {
 	t.Helper()
-	tc.createDummySecret(t, storageType, secretName, tc.MonitoringNamespace)
+	tc.createLokiS3Secret(t, secretName, tc.MonitoringNamespace)
 	tc.updateMonitoringConfig(
 		withManagementState(common.Managed),
 		withUsageLogsStorage(storageType, secretName, ""),
@@ -368,46 +368,116 @@ func detectExpectedReplicas(t *testing.T, tc *TestContext) int {
 	return 2
 }
 
-// createDummySecret creates a test secret for TempoStack (S3 or GCS backend).
+// createDummySecret creates a test secret for the specified backend type.
+// For Tempo backends, this routes to tempo-specific helpers.
+// Deprecated: Use createTempoS3Secret, createTempoGCSSecret, or createLokiS3Secret directly.
 func (tc *MonitoringTestCtx) createDummySecret(t *testing.T, backendType, secretName, namespace string) {
 	t.Helper()
 
-	var secret *corev1.Secret
-
 	switch backendType {
 	case "s3":
-		secret = &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      secretName,
-				Namespace: namespace,
-			},
-			Type: corev1.SecretTypeOpaque,
-			Data: map[string][]byte{
-				"access_key_id":     []byte("fake-access-key"),
-				"access_key_secret": []byte("fake-secret-key"),
-				"bucketnames":       []byte("fake-bucket"),
-				"endpoint":          []byte("https://s3.us-east-1.amazonaws.com"),
-				"region":            []byte("us-east-1"),
-				"insecure":          []byte("false"),
-				"s3ForcePathStyle":  []byte("false"),
-			},
-		}
+		tc.createTempoS3Secret(t, secretName, namespace)
+	case "gcs":
+		tc.createTempoGCSSecret(t, secretName, namespace)
 	default:
 		tc.g.Fail(fmt.Sprintf("Unsupported backend type: %s", backendType))
-		return
 	}
+}
 
-	secretU := &unstructured.Unstructured{}
-	secretU.SetGroupVersionKind(gvk.Secret)
-	secretU.SetName(secret.Name)
-	secretU.SetNamespace(secret.Namespace)
-	secretU.Object["type"] = string(secret.Type)
+// createTempoS3Secret creates an S3 secret compatible with TempoStack operator.
+func (tc *MonitoringTestCtx) createTempoS3Secret(t *testing.T, secretName, namespace string) {
+	t.Helper()
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      secretName,
+			Namespace: namespace,
+		},
+		Type: corev1.SecretTypeOpaque,
+		Data: map[string][]byte{
+			"access_key_id":     []byte("fake-access-key"),
+			"access_key_secret": []byte("fake-secret-key"),
+			"bucket":            []byte("fake-bucket"),
+			"endpoint":          []byte("https://s3.amazonaws.com"),
+		},
+	}
 
 	data := make(map[string]any, len(secret.Data))
 	for k, v := range secret.Data {
 		data[k] = string(v)
 	}
-	secretU.Object["stringData"] = data
+
+	tc.EventuallyResourceCreatedOrPatched(
+		WithMinimalObject(gvk.Secret, types.NamespacedName{Name: secret.Name, Namespace: secret.Namespace}),
+		WithMutateFunc(func(u *unstructured.Unstructured) error {
+			u.Object["type"] = string(secret.Type)
+			u.Object["stringData"] = data
+			return nil
+		}),
+	)
+}
+
+// createTempoGCSSecret creates a GCS secret compatible with TempoStack operator.
+func (tc *MonitoringTestCtx) createTempoGCSSecret(t *testing.T, secretName, namespace string) {
+	t.Helper()
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      secretName,
+			Namespace: namespace,
+		},
+		Type: corev1.SecretTypeOpaque,
+		Data: map[string][]byte{
+			"key.json": []byte(`{
+				"type": "service_account",
+				"project_id": "fake-test-project-not-real",
+				"private_key_id": "test-key-id-fake",
+				"private_key": "-----BEGIN PRIVATE KEY-----\nTEST-FAKE-KEY-NOT-REAL\n-----END PRIVATE KEY-----\n",
+				"client_email": "test-fake@fake-project.iam.gserviceaccount.com"
+			}`),
+		},
+	}
+
+	data := make(map[string]any, len(secret.Data))
+	for k, v := range secret.Data {
+		data[k] = string(v)
+	}
+
+	tc.EventuallyResourceCreatedOrPatched(
+		WithMinimalObject(gvk.Secret, types.NamespacedName{Name: secret.Name, Namespace: secret.Namespace}),
+		WithMutateFunc(func(u *unstructured.Unstructured) error {
+			u.Object["type"] = string(secret.Type)
+			u.Object["stringData"] = data
+			return nil
+		}),
+	)
+}
+
+// createLokiS3Secret creates an S3 secret compatible with LokiStack operator.
+func (tc *MonitoringTestCtx) createLokiS3Secret(t *testing.T, secretName, namespace string) {
+	t.Helper()
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      secretName,
+			Namespace: namespace,
+		},
+		Type: corev1.SecretTypeOpaque,
+		Data: map[string][]byte{
+			"access_key_id":     []byte("fake-access-key"),
+			"access_key_secret": []byte("fake-secret-key"),
+			"bucketnames":       []byte("fake-bucket"),
+			"endpoint":          []byte("https://s3.us-east-1.amazonaws.com"),
+			"region":            []byte("us-east-1"),
+			"insecure":          []byte("false"),
+			"s3ForcePathStyle":  []byte("false"),
+		},
+	}
+
+	data := make(map[string]any, len(secret.Data))
+	for k, v := range secret.Data {
+		data[k] = string(v)
+	}
 
 	tc.EventuallyResourceCreatedOrPatched(
 		WithMinimalObject(gvk.Secret, types.NamespacedName{Name: secret.Name, Namespace: secret.Namespace}),
@@ -474,18 +544,6 @@ func withUsageLogsStorage(storageType, secretName, storageClassName string) jq.T
 }
 
 func withUsageLogsStorageAndCredentialMode(storageType, secretName, storageClassName, credentialMode string) jq.TransformFn {
-	base := map[string]interface{}{
-		"type":       storageType,
-		"secretName": secretName,
-	}
-	if storageClassName != "" {
-		base["storageClassName"] = storageClassName
-	}
-	if credentialMode != "" {
-		base["credentialMode"] = credentialMode
-	}
-
-	// Build the JSON string manually
 	if storageClassName == "" && credentialMode == "" {
 		return jq.Transform(`.spec.usageLogs.storage = {"type": "%s", "secretName": "%s"}`, storageType, secretName)
 	} else if storageClassName != "" && credentialMode == "" {
