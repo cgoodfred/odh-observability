@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
@@ -56,7 +57,10 @@ import (
 	"github.com/opendatahub-io/odh-observability/internal/controller/conditions"
 )
 
-const monitoringFinalizer = "monitoring.opendatahub.io/cleanup"
+const (
+	monitoringFinalizer                   = "monitoring.opendatahub.io/cleanup"
+	skipLokiStackReadinessCheckAnnotation = "testing.odh.io/skip-lokistack-readiness-check"
+)
 
 // MonitoringReconciler reconciles a Monitoring object.
 type MonitoringReconciler struct {
@@ -145,6 +149,9 @@ func (r *MonitoringReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 func (r *MonitoringReconciler) reconcile(ctx context.Context, monitoring *v1alpha1.Monitoring) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 	cm := conditions.NewConditionsManager(monitoring, monitoring.Generation)
+
+	// Check if LokiStack readiness check should be skipped (for e2e tests with fake credentials)
+	skipLokiReadinessCheck := monitoring.Annotations[skipLokiStackReadinessCheckAnnotation] == "true"
 
 	defer func() {
 		monitoring.Status.Status.ObservedGeneration = monitoring.Generation
@@ -260,10 +267,34 @@ func (r *MonitoringReconciler) reconcile(ctx context.Context, monitoring *v1alph
 		log.Error(err, "Failed to sync status URL")
 	}
 
-	// Update usageLogsEndpoint in status from template data
-	monitoring.Status.UsageLogsEndpoint = data["UsageLogsEndpoint"].(string)
+	// Update usageLogsEndpoint in status only when LokiStack is ready
+	requeueNeeded := false
+	if monitoring.Spec.UsageLogs != nil && monitoring.Spec.UsageLogs.Storage != nil {
+		if skipLokiReadinessCheck {
+			// Test mode: set endpoint immediately
+			monitoring.Status.UsageLogsEndpoint = data["UsageLogsEndpoint"].(string)
+		} else {
+			// Production mode: only set endpoint when LokiStack is ready
+			lokiReady, err := isLokiStackReady(ctx, r.Client, monitoring)
+			if err != nil {
+				log.Error(err, "Failed to check LokiStack readiness")
+			}
+			if lokiReady {
+				monitoring.Status.UsageLogsEndpoint = data["UsageLogsEndpoint"].(string)
+			} else {
+				monitoring.Status.UsageLogsEndpoint = ""
+				requeueNeeded = true // Requeue to check again when LokiStack becomes ready
+			}
+		}
+	} else {
+		monitoring.Status.UsageLogsEndpoint = ""
+	}
 
 	cm.AggregateReady()
+
+	if requeueNeeded {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
 	return ctrl.Result{}, nil
 }
 

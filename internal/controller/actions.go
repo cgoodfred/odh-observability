@@ -464,9 +464,17 @@ func deployUsageLogsCollector(
 	cm *conditions.ConditionsManager,
 	sources *[]rendertemplate.TemplateSource,
 ) error {
-	if monitoring.Spec.UsageLogs == nil {
+	if monitoring.Spec.UsageLogs == nil || monitoring.Spec.UsageLogs.Storage == nil {
 		cm.MarkNotConfigured(conditions.ConditionUsageLogsCollectorAvailable,
 			"UsageLogsNotConfigured", "Usage logs not configured in Monitoring CR")
+		return nil
+	}
+
+	// Wait for LokiStack endpoint to be available in status (set only when Loki is ready)
+	if monitoring.Status.UsageLogsEndpoint == "" {
+		cm.MarkFalse(conditions.ConditionUsageLogsCollectorAvailable,
+			"LokiStackNotReady",
+			"Waiting for LokiStack to be ready")
 		return nil
 	}
 
@@ -694,4 +702,49 @@ func ensureWebhookEnabled(
 	}
 
 	return c.Patch(ctx, dep, patch)
+}
+
+// isLokiStackReady checks if the LokiStack CR exists and is in a Ready state.
+func isLokiStackReady(ctx context.Context, c client.Client, monitoring *v1alpha1.Monitoring) (bool, error) {
+	lokiStack := &unstructured.Unstructured{}
+	lokiStack.SetGroupVersionKind(gvk.LokiStack)
+
+	namespace := monitoring.Spec.Namespace
+	if namespace == "" {
+		namespace = "opendatahub"
+	}
+
+	err := c.Get(ctx, types.NamespacedName{
+		Name:      "data-science-lokistack",
+		Namespace: namespace,
+	}, lokiStack)
+
+	if err != nil {
+		if k8serr.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+
+	// Check if LokiStack has Ready condition set to True
+	conditions, found, err := unstructured.NestedSlice(lokiStack.Object, "status", "conditions")
+	if err != nil || !found {
+		return false, nil
+	}
+
+	for _, cond := range conditions {
+		condMap, ok := cond.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		condType, _, _ := unstructured.NestedString(condMap, "type")
+		condStatus, _, _ := unstructured.NestedString(condMap, "status")
+
+		if condType == "Ready" && condStatus == "True" {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }

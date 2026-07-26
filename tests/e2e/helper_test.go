@@ -328,7 +328,16 @@ func (tc *MonitoringTestCtx) setupUsageLogsWithStorage(t *testing.T, storageType
 	tc.updateMonitoringConfig(
 		withManagementState(common.Managed),
 		withUsageLogsStorage(storageType, secretName, ""),
+		withSkipLokiStackReadinessCheck(),
 	)
+}
+
+const skipLokiStackReadinessCheckAnnotation = "testing.odh.io/skip-lokistack-readiness-check"
+
+// withSkipLokiStackReadinessCheck adds a test annotation to skip LokiStack readiness check.
+// This allows tests to run with fake S3 credentials.
+func withSkipLokiStackReadinessCheck() jq.TransformFn {
+	return jq.Transform(`.metadata.annotations["%s"] = "true"`, skipLokiStackReadinessCheckAnnotation)
 }
 
 // cleanupTracesConfiguration resets traces configuration.
@@ -541,21 +550,6 @@ func withUsageLogsStorage(storageType, secretName, storageClassName string) jq.T
 		return jq.Transform(`.spec.usageLogs.storage = {"type": "%s", "secretName": "%s"}`, storageType, secretName)
 	}
 	return jq.Transform(`.spec.usageLogs.storage = {"type": "%s", "secretName": "%s", "storageClassName": "%s"}`, storageType, secretName, storageClassName)
-}
-
-func withUsageLogsStorageAndCredentialMode(storageType, secretName, storageClassName, credentialMode string) jq.TransformFn {
-	if storageClassName == "" && credentialMode == "" {
-		return jq.Transform(`.spec.usageLogs.storage = {"type": "%s", "secretName": "%s"}`, storageType, secretName)
-	} else if storageClassName != "" && credentialMode == "" {
-		return jq.Transform(`.spec.usageLogs.storage = {"type": "%s", "secretName": "%s", "storageClassName": "%s"}`, storageType, secretName, storageClassName)
-	} else if storageClassName == "" && credentialMode != "" {
-		return jq.Transform(`.spec.usageLogs.storage = {"type": "%s", "secretName": "%s", "credentialMode": "%s"}`, storageType, secretName, credentialMode)
-	}
-	return jq.Transform(`.spec.usageLogs.storage = {"type": "%s", "secretName": "%s", "storageClassName": "%s", "credentialMode": "%s"}`, storageType, secretName, storageClassName, credentialMode)
-}
-
-func withLokiS3Storage(secretName string) jq.TransformFn {
-	return withUsageLogsStorage("s3", secretName, "")
 }
 
 func withNoCollectorReplicas() jq.TransformFn {
