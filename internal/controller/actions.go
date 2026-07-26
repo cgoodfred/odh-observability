@@ -523,7 +523,20 @@ func deployLokiStack(
 		return nil
 	}
 
-	cm.MarkTrue(conditions.ConditionLokiStackAvailable)
+	// Check if LokiStack is actually ready
+	lokiReady, err := isLokiStackReady(ctx, c, monitoring)
+	if err != nil {
+		return fmt.Errorf("checking LokiStack readiness: %w", err)
+	}
+
+	if lokiReady {
+		cm.MarkTrue(conditions.ConditionLokiStackAvailable)
+	} else {
+		cm.MarkFalse(conditions.ConditionLokiStackAvailable,
+			"LokiStackNotReady",
+			"LokiStack is not ready yet")
+	}
+
 	*sources = append(*sources, src(LokiStackTemplate))
 	return nil
 }
@@ -728,7 +741,11 @@ func isLokiStackReady(ctx context.Context, c client.Client, monitoring *v1alpha1
 
 	// Check if LokiStack has Ready condition set to True
 	conditions, found, err := unstructured.NestedSlice(lokiStack.Object, "status", "conditions")
-	if err != nil || !found {
+	if err != nil {
+		return false, fmt.Errorf("malformed LokiStack status.conditions: %w", err)
+	}
+	if !found {
+		// No conditions field means LokiStack not ready yet (normal state)
 		return false, nil
 	}
 

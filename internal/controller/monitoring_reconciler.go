@@ -58,8 +58,7 @@ import (
 )
 
 const (
-	monitoringFinalizer                   = "monitoring.opendatahub.io/cleanup"
-	skipLokiStackReadinessCheckAnnotation = "testing.odh.io/skip-lokistack-readiness-check"
+	monitoringFinalizer = "monitoring.opendatahub.io/cleanup"
 )
 
 // MonitoringReconciler reconciles a Monitoring object.
@@ -149,9 +148,6 @@ func (r *MonitoringReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 func (r *MonitoringReconciler) reconcile(ctx context.Context, monitoring *v1alpha1.Monitoring) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 	cm := conditions.NewConditionsManager(monitoring, monitoring.Generation)
-
-	// Check if LokiStack readiness check should be skipped (for e2e tests with fake credentials)
-	skipLokiReadinessCheck := monitoring.Annotations[skipLokiStackReadinessCheckAnnotation] == "true"
 
 	defer func() {
 		monitoring.Status.Status.ObservedGeneration = monitoring.Generation
@@ -270,21 +266,17 @@ func (r *MonitoringReconciler) reconcile(ctx context.Context, monitoring *v1alph
 	// Update usageLogsEndpoint in status only when LokiStack is ready
 	requeueNeeded := false
 	if monitoring.Spec.UsageLogs != nil && monitoring.Spec.UsageLogs.Storage != nil {
-		if skipLokiReadinessCheck {
-			// Test mode: set endpoint immediately
+		lokiReady, err := isLokiStackReady(ctx, r.Client, monitoring)
+		if err != nil {
+			log.Error(err, "Failed to check LokiStack readiness")
+			cm.MarkFalse(string(platformcommon.ConditionTypeReady), "LokiStackReadinessCheckFailed", err.Error())
+			return ctrl.Result{}, err
+		}
+		if lokiReady {
 			monitoring.Status.UsageLogsEndpoint = data["UsageLogsEndpoint"].(string)
 		} else {
-			// Production mode: only set endpoint when LokiStack is ready
-			lokiReady, err := isLokiStackReady(ctx, r.Client, monitoring)
-			if err != nil {
-				log.Error(err, "Failed to check LokiStack readiness")
-			}
-			if lokiReady {
-				monitoring.Status.UsageLogsEndpoint = data["UsageLogsEndpoint"].(string)
-			} else {
-				monitoring.Status.UsageLogsEndpoint = ""
-				requeueNeeded = true // Requeue to check again when LokiStack becomes ready
-			}
+			monitoring.Status.UsageLogsEndpoint = ""
+			requeueNeeded = true // Requeue to check again when LokiStack becomes ready
 		}
 	} else {
 		monitoring.Status.UsageLogsEndpoint = ""

@@ -328,16 +328,7 @@ func (tc *MonitoringTestCtx) setupUsageLogsWithStorage(t *testing.T, storageType
 	tc.updateMonitoringConfig(
 		withManagementState(common.Managed),
 		withUsageLogsStorage(storageType, secretName, ""),
-		withSkipLokiStackReadinessCheck(),
 	)
-}
-
-const skipLokiStackReadinessCheckAnnotation = "testing.odh.io/skip-lokistack-readiness-check"
-
-// withSkipLokiStackReadinessCheck adds a test annotation to skip LokiStack readiness check.
-// This allows tests to run with fake S3 credentials.
-func withSkipLokiStackReadinessCheck() jq.TransformFn {
-	return jq.Transform(`.metadata.annotations["%s"] = "true"`, skipLokiStackReadinessCheckAnnotation)
 }
 
 // cleanupTracesConfiguration resets traces configuration.

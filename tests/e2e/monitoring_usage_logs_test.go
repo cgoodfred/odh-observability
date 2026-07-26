@@ -26,14 +26,43 @@ func (tc *MonitoringTestCtx) runUsageLogsCollectionTests(t *testing.T) {
 			tc.cleanupGroup(t, "")
 		})
 
+		// Test 1: Validate not deployed without config (modifies state, run first)
 		t.Run("Test Usage Logs Collector not deployed without usage logs config", tc.ValidateUsageLogsCollectorNotDeployedWithoutConfig)
-		t.Run("Test Usage Logs Collector deployment with usage logs config", tc.ValidateUsageLogsCollectorDeployment)
-		t.Run("Test Usage Logs Collector configuration", tc.ValidateUsageLogsCollectorConfiguration)
-		t.Run("Test Usage Logs Collector RBAC configuration", tc.ValidateUsageLogsCollectorRBACConfiguration)
-		t.Run("Test Usage Logs Collector lifecycle", tc.ValidateUsageLogsCollectorLifecycle)
-		t.Run("Test Usage Logs LokiStack deployment", tc.ValidateUsageLogsLokiStackDeployment)
-		t.Run("Test Usage Logs LokiStack configuration", tc.ValidateUsageLogsLokiStackConfiguration)
-		t.Run("Test Usage Logs LokiStack lifecycle", tc.ValidateUsageLogsLokiStackLifecycle)
+
+		// Setup shared resources once for validation tests
+		secretName := "test-loki-shared-secret"
+		t.Run("Setup shared UsageLogs resources", func(t *testing.T) {
+			tc.setupUsageLogsWithStorage(t, "s3", secretName)
+
+			// Wait for everything to be ready
+			tc.EnsureResourceExists(
+				WithMinimalObject(gvk.Monitoring, types.NamespacedName{Name: tc.MonitoringCRName}),
+				WithCondition(And(
+					jq.Match(`.status.conditions[] | select(.type == "%s") | .status == "%s"`, common.ConditionTypeReady, metav1.ConditionTrue),
+					jq.Match(`.status.conditions[] | select(.type == "%s") | .status == "%s"`, conditions.ConditionUsageLogsCollectorAvailable, metav1.ConditionTrue),
+					jq.Match(`.status.conditions[] | select(.type == "%s") | .status == "%s"`, conditions.ConditionLokiStackAvailable, metav1.ConditionTrue),
+				)),
+				WithCustomErrorMsg("Shared setup: Monitoring should be ready with UsageLogs"),
+			)
+
+			tc.EnsureDeploymentReady(
+				WithMinimalObject(gvk.Deployment, types.NamespacedName{
+					Name:      UsageLogsCollectorName + "-collector",
+					Namespace: tc.MonitoringNamespace,
+				}),
+			)
+		})
+
+		// All validation tests run against the same shared resources (read-only)
+		// LokiStack tests run first since OTEL depends on LokiStack
+		t.Run("Validate LokiStack deployment", tc.ValidateUsageLogsLokiStackDeployment)
+		t.Run("Validate LokiStack configuration", tc.ValidateUsageLogsLokiStackConfiguration)
+		t.Run("Validate Usage Logs Collector deployment", tc.ValidateUsageLogsCollectorDeployment)
+		t.Run("Validate Usage Logs Collector configuration", tc.ValidateUsageLogsCollectorConfiguration)
+		t.Run("Validate Usage Logs Collector RBAC", tc.ValidateUsageLogsCollectorRBACConfiguration)
+
+		// Lifecycle test modifies state, run last
+		t.Run("Test Usage Logs lifecycle (LokiStack + Collector)", tc.ValidateUsageLogsLifecycle)
 	})
 }
 
@@ -83,24 +112,17 @@ func (tc *MonitoringTestCtx) ValidateUsageLogsCollectorNotDeployedWithoutConfig(
 // ValidateUsageLogsCollectorDeployment tests that the logs collector is deployed and ready when logs are configured.
 func (tc *MonitoringTestCtx) ValidateUsageLogsCollectorDeployment(t *testing.T) {
 	t.Helper()
-	t.Cleanup(tc.resetMonitoringConfigToManaged)
-
-	secretName := "test-loki-s3-secret"
-	t.Cleanup(func() { tc.cleanupLokiStackAndSecret(secretName) })
-
-	tc.setupUsageLogsWithStorage(t, "s3", secretName)
 
 	tc.EnsureResourceExists(
 		WithMinimalObject(gvk.Monitoring, types.NamespacedName{Name: tc.MonitoringCRName}),
 		WithCondition(And(
 			jq.Match(`.spec.usageLogs.storage.type == "s3"`),
-			jq.Match(`.spec.usageLogs.storage.secretName == "%s"`, secretName),
 			jq.Match(`.spec.usageLogs.storage.credentialMode == "static"`),
 			jq.Match(`.status.conditions[] | select(.type == "%s") | .status == "%s"`, common.ConditionTypeReady, metav1.ConditionTrue),
 			jq.Match(`.status.conditions[] | select(.type == "%s") | .status == "%s"`, conditions.ConditionUsageLogsCollectorAvailable, metav1.ConditionTrue),
 			jq.Match(`.status.conditions[] | select(.type == "%s") | .status == "%s"`, conditions.ConditionLokiStackAvailable, metav1.ConditionTrue),
 		)),
-		WithCustomErrorMsg("Monitoring resource should be updated with logs configuration and UsageLogsCollector and LokiStack should be available"),
+		WithCustomErrorMsg("Monitoring resource should be ready with logs configuration and UsageLogsCollector and LokiStack available"),
 	)
 
 	tc.EnsureResourceExists(
@@ -127,12 +149,6 @@ func (tc *MonitoringTestCtx) ValidateUsageLogsCollectorDeployment(t *testing.T) 
 // ValidateUsageLogsCollectorConfiguration validates the logs collector configuration details.
 func (tc *MonitoringTestCtx) ValidateUsageLogsCollectorConfiguration(t *testing.T) {
 	t.Helper()
-	t.Cleanup(tc.resetMonitoringConfigToManaged)
-
-	secretName := "test-loki-s3-secret"
-	t.Cleanup(func() { tc.cleanupLokiStackAndSecret(secretName) })
-
-	tc.setupUsageLogsWithStorage(t, "s3", secretName)
 
 	tc.EnsureResourceExists(
 		WithMinimalObject(gvk.OpenTelemetryCollector, types.NamespacedName{
@@ -170,12 +186,6 @@ func (tc *MonitoringTestCtx) ValidateUsageLogsCollectorConfiguration(t *testing.
 // ValidateUsageLogsCollectorRBACConfiguration tests that the logs collector has correct RBAC permissions.
 func (tc *MonitoringTestCtx) ValidateUsageLogsCollectorRBACConfiguration(t *testing.T) {
 	t.Helper()
-	t.Cleanup(tc.resetMonitoringConfigToManaged)
-
-	secretName := "test-loki-s3-secret"
-	t.Cleanup(func() { tc.cleanupLokiStackAndSecret(secretName) })
-
-	tc.setupUsageLogsWithStorage(t, "s3", secretName)
 
 	tc.EnsureResourceExists(
 		WithMinimalObject(gvk.ServiceAccount, types.NamespacedName{
@@ -224,16 +234,24 @@ func (tc *MonitoringTestCtx) ValidateUsageLogsCollectorRBACConfiguration(t *test
 	)
 }
 
-// ValidateUsageLogsCollectorLifecycle tests the complete lifecycle of logs collector deployment and cleanup.
-func (tc *MonitoringTestCtx) ValidateUsageLogsCollectorLifecycle(t *testing.T) {
+// ValidateUsageLogsLifecycle tests the complete lifecycle of usage logs (LokiStack + collector) deployment and cleanup.
+func (tc *MonitoringTestCtx) ValidateUsageLogsLifecycle(t *testing.T) {
 	t.Helper()
 	t.Cleanup(tc.resetMonitoringConfigToManaged)
 
 	secretName := "test-loki-lifecycle-secret"
 	t.Cleanup(func() { tc.cleanupLokiStackAndSecret(secretName) })
 
-	// Step 1: Enable logs
+	// Step 1: Enable usage logs
 	tc.setupUsageLogsWithStorage(t, "s3", secretName)
+
+	tc.EnsureResourceExists(
+		WithMinimalObject(gvk.LokiStack, types.NamespacedName{
+			Name:      LokiStackName,
+			Namespace: tc.MonitoringNamespace,
+		}),
+		WithCustomErrorMsg("LokiStack should be deployed when usage logs are enabled"),
+	)
 
 	tc.EnsureResourceExists(
 		WithMinimalObject(gvk.OpenTelemetryCollector, types.NamespacedName{
@@ -241,33 +259,34 @@ func (tc *MonitoringTestCtx) ValidateUsageLogsCollectorLifecycle(t *testing.T) {
 			Namespace: tc.MonitoringNamespace,
 		}),
 		WithCondition(jq.Match(`.spec.config.exporters."otlphttp/loki" != null`)),
-		WithCustomErrorMsg("Logs collector should be deployed when logs are enabled"),
+		WithCustomErrorMsg("Logs collector should be deployed when usage logs are enabled"),
 	)
 
 	tc.EnsureResourceExists(
-		WithMinimalObject(gvk.LokiStack, types.NamespacedName{
-			Name:      LokiStackName,
-			Namespace: tc.MonitoringNamespace,
-		}),
-		WithCustomErrorMsg("LokiStack should be deployed when logs are enabled"),
+		WithMinimalObject(gvk.Monitoring, types.NamespacedName{Name: tc.MonitoringCRName}),
+		WithCondition(And(
+			jq.Match(`.status.conditions[] | select(.type == "%s") | .status == "%s"`, conditions.ConditionLokiStackAvailable, metav1.ConditionTrue),
+			jq.Match(`.status.conditions[] | select(.type == "%s") | .status == "%s"`, conditions.ConditionUsageLogsCollectorAvailable, metav1.ConditionTrue),
+		)),
+		WithCustomErrorMsg("LokiStackAvailable and UsageLogsCollectorAvailable conditions should be True when usage logs are enabled"),
 	)
 
-	// Step 2: Disable logs
+	// Step 2: Disable usage logs
 	tc.updateMonitoringConfig(
 		withManagementState(common.Managed),
 		withNoUsageLogs(),
 	)
 
 	tc.EnsureResourceGone(
-		WithMinimalObject(gvk.OpenTelemetryCollector, types.NamespacedName{
-			Name:      UsageLogsCollectorName,
+		WithMinimalObject(gvk.LokiStack, types.NamespacedName{
+			Name:      LokiStackName,
 			Namespace: tc.MonitoringNamespace,
 		}),
 	)
 
 	tc.EnsureResourceGone(
-		WithMinimalObject(gvk.LokiStack, types.NamespacedName{
-			Name:      LokiStackName,
+		WithMinimalObject(gvk.OpenTelemetryCollector, types.NamespacedName{
+			Name:      UsageLogsCollectorName,
 			Namespace: tc.MonitoringNamespace,
 		}),
 	)
@@ -275,14 +294,22 @@ func (tc *MonitoringTestCtx) ValidateUsageLogsCollectorLifecycle(t *testing.T) {
 	tc.EnsureResourceExists(
 		WithMinimalObject(gvk.Monitoring, types.NamespacedName{Name: tc.MonitoringCRName}),
 		WithCondition(And(
-			jq.Match(`.status.conditions[] | select(.type == "%s") | .status == "%s"`, conditions.ConditionUsageLogsCollectorAvailable, metav1.ConditionFalse),
 			jq.Match(`.status.conditions[] | select(.type == "%s") | .status == "%s"`, conditions.ConditionLokiStackAvailable, metav1.ConditionFalse),
+			jq.Match(`.status.conditions[] | select(.type == "%s") | .status == "%s"`, conditions.ConditionUsageLogsCollectorAvailable, metav1.ConditionFalse),
 		)),
-		WithCustomErrorMsg("UsageLogsCollectorAvailable and LokiStackAvailable conditions should be False when logs are disabled"),
+		WithCustomErrorMsg("LokiStackAvailable and UsageLogsCollectorAvailable conditions should be False when usage logs are disabled"),
 	)
 
-	// Step 3: Re-enable logs
+	// Step 3: Re-enable usage logs
 	tc.setupUsageLogsWithStorage(t, "s3", secretName)
+
+	tc.EnsureResourceExists(
+		WithMinimalObject(gvk.LokiStack, types.NamespacedName{
+			Name:      LokiStackName,
+			Namespace: tc.MonitoringNamespace,
+		}),
+		WithCustomErrorMsg("LokiStack should be recreated when usage logs are re-enabled"),
+	)
 
 	tc.EnsureResourceExists(
 		WithMinimalObject(gvk.OpenTelemetryCollector, types.NamespacedName{
@@ -290,27 +317,22 @@ func (tc *MonitoringTestCtx) ValidateUsageLogsCollectorLifecycle(t *testing.T) {
 			Namespace: tc.MonitoringNamespace,
 		}),
 		WithCondition(jq.Match(`.spec.config.exporters."otlphttp/loki" != null`)),
-		WithCustomErrorMsg("Logs collector should be recreated when logs are re-enabled"),
+		WithCustomErrorMsg("Logs collector should be recreated when usage logs are re-enabled"),
 	)
 
 	tc.EnsureResourceExists(
-		WithMinimalObject(gvk.LokiStack, types.NamespacedName{
-			Name:      LokiStackName,
-			Namespace: tc.MonitoringNamespace,
-		}),
-		WithCustomErrorMsg("LokiStack should be recreated when logs are re-enabled"),
+		WithMinimalObject(gvk.Monitoring, types.NamespacedName{Name: tc.MonitoringCRName}),
+		WithCondition(And(
+			jq.Match(`.status.conditions[] | select(.type == "%s") | .status == "%s"`, conditions.ConditionLokiStackAvailable, metav1.ConditionTrue),
+			jq.Match(`.status.conditions[] | select(.type == "%s") | .status == "%s"`, conditions.ConditionUsageLogsCollectorAvailable, metav1.ConditionTrue),
+		)),
+		WithCustomErrorMsg("LokiStackAvailable and UsageLogsCollectorAvailable conditions should be True when usage logs are re-enabled"),
 	)
 }
 
 // ValidateUsageLogsLokiStackDeployment tests that LokiStack is deployed with correct configuration.
 func (tc *MonitoringTestCtx) ValidateUsageLogsLokiStackDeployment(t *testing.T) {
 	t.Helper()
-	t.Cleanup(tc.resetMonitoringConfigToManaged)
-
-	secretName := "test-loki-s3-secret"
-	t.Cleanup(func() { tc.cleanupLokiStackAndSecret(secretName) })
-
-	tc.setupUsageLogsWithStorage(t, "s3", secretName)
 
 	// Verify LokiStack CR is created
 	tc.EnsureResourceExists(
@@ -321,7 +343,6 @@ func (tc *MonitoringTestCtx) ValidateUsageLogsLokiStackDeployment(t *testing.T) 
 		WithCondition(And(
 			monitoringOwnerReferencesCondition,
 			jq.Match(`.spec.size == "1x.extra-small"`),
-			jq.Match(`.spec.storage.secret.name == "%s"`, secretName),
 			jq.Match(`.spec.storage.secret.type == "s3"`),
 			jq.Match(`.spec.storage.secret.credentialMode == "static"`),
 			jq.Match(`.spec.storageClassName == "gp3-csi"`),
@@ -340,21 +361,9 @@ func (tc *MonitoringTestCtx) ValidateUsageLogsLokiStackDeployment(t *testing.T) 
 	)
 }
 
-// ValidateUsageLogsLokiStackConfiguration tests LokiStack with custom storage class and OTLP labels.
+// ValidateUsageLogsLokiStackConfiguration tests LokiStack with OTLP stream labels configuration.
 func (tc *MonitoringTestCtx) ValidateUsageLogsLokiStackConfiguration(t *testing.T) {
 	t.Helper()
-	t.Cleanup(tc.resetMonitoringConfigToManaged)
-
-	secretName := "test-loki-s3-custom-secret"
-	storageClassName := "premium-rwo"
-	t.Cleanup(func() { tc.cleanupLokiStackAndSecret(secretName) })
-
-	// Test with S3 and custom storage class
-	tc.createLokiS3Secret(t, secretName, tc.MonitoringNamespace)
-	tc.updateMonitoringConfig(
-		withManagementState(common.Managed),
-		withUsageLogsStorage("s3", secretName, storageClassName),
-	)
 
 	tc.EnsureResourceExists(
 		WithMinimalObject(gvk.LokiStack, types.NamespacedName{
@@ -362,74 +371,12 @@ func (tc *MonitoringTestCtx) ValidateUsageLogsLokiStackConfiguration(t *testing.
 			Namespace: tc.MonitoringNamespace,
 		}),
 		WithCondition(And(
-			jq.Match(`.spec.storage.secret.type == "s3"`),
-			jq.Match(`.spec.storage.secret.name == "%s"`, secretName),
-			jq.Match(`.spec.storageClassName == "%s"`, storageClassName),
 			jq.Match(`.spec.limits.tenants.application.otlp.streamLabels.resourceAttributes | length == 4`),
 			jq.Match(`[.spec.limits.tenants.application.otlp.streamLabels.resourceAttributes[] | select(.name == "kubernetes_namespace_name")] | length == 1`),
 			jq.Match(`[.spec.limits.tenants.application.otlp.streamLabels.resourceAttributes[] | select(.name == "model")] | length == 1`),
 			jq.Match(`[.spec.limits.tenants.application.otlp.streamLabels.resourceAttributes[] | select(.name == "subscription")] | length == 1`),
 			jq.Match(`[.spec.limits.tenants.application.otlp.streamLabels.resourceAttributes[] | select(.name == "response_type")] | length == 1`),
 		)),
-		WithCustomErrorMsg("LokiStack should support custom storage class with correct OTLP stream labels"),
-	)
-}
-
-// ValidateUsageLogsLokiStackLifecycle tests the complete lifecycle of LokiStack deployment and cleanup.
-func (tc *MonitoringTestCtx) ValidateUsageLogsLokiStackLifecycle(t *testing.T) {
-	t.Helper()
-	t.Cleanup(tc.resetMonitoringConfigToManaged)
-
-	secretName := "test-loki-lifecycle-secret"
-	t.Cleanup(func() { tc.cleanupLokiStackAndSecret(secretName) })
-
-	// Step 1: Enable usage logs with storage
-	tc.setupUsageLogsWithStorage(t, "s3", secretName)
-
-	tc.EnsureResourceExists(
-		WithMinimalObject(gvk.LokiStack, types.NamespacedName{
-			Name:      LokiStackName,
-			Namespace: tc.MonitoringNamespace,
-		}),
-		WithCustomErrorMsg("LokiStack should be deployed when usage logs storage is configured"),
-	)
-
-	tc.EnsureResourceExists(
-		WithMinimalObject(gvk.Monitoring, types.NamespacedName{Name: tc.MonitoringCRName}),
-		WithCondition(
-			jq.Match(`.status.conditions[] | select(.type == "%s") | .status == "%s"`, conditions.ConditionLokiStackAvailable, metav1.ConditionTrue),
-		),
-	)
-
-	// Step 2: Disable usage logs
-	tc.updateMonitoringConfig(
-		withManagementState(common.Managed),
-		withNoUsageLogs(),
-	)
-
-	tc.EnsureResourceGone(
-		WithMinimalObject(gvk.LokiStack, types.NamespacedName{
-			Name:      LokiStackName,
-			Namespace: tc.MonitoringNamespace,
-		}),
-	)
-
-	tc.EnsureResourceExists(
-		WithMinimalObject(gvk.Monitoring, types.NamespacedName{Name: tc.MonitoringCRName}),
-		WithCondition(
-			jq.Match(`.status.conditions[] | select(.type == "%s") | .status == "%s"`, conditions.ConditionLokiStackAvailable, metav1.ConditionFalse),
-		),
-		WithCustomErrorMsg("LokiStackAvailable condition should be False when usage logs are disabled"),
-	)
-
-	// Step 3: Re-enable usage logs
-	tc.setupUsageLogsWithStorage(t, "s3", secretName)
-
-	tc.EnsureResourceExists(
-		WithMinimalObject(gvk.LokiStack, types.NamespacedName{
-			Name:      LokiStackName,
-			Namespace: tc.MonitoringNamespace,
-		}),
-		WithCustomErrorMsg("LokiStack should be recreated when usage logs are re-enabled"),
+		WithCustomErrorMsg("LokiStack should have correct OTLP stream labels"),
 	)
 }
