@@ -344,10 +344,6 @@ func addImageURLs(templateData map[string]any) {
 		"RELATED_IMAGE_OSE_PROM_LABEL_PROXY_IMAGE",
 		"quay.io/prometheuscommunity/prom-label-proxy:v0.12.1",
 	)
-	templateData["CLIImage"] = getEnvOrDefault(
-		"RELATED_IMAGE_CLI_IMAGE",
-		"quay.io/openshift/origin-cli:4.17",
-	)
 }
 
 func getEnvOrDefault(envVar, defaultVal string) string {
