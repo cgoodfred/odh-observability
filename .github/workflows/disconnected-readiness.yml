@@ -4,11 +4,10 @@ on:
     branches:
       - main
 
-permissions:
-  contents: read
-
 jobs:
   check:
-    uses: opendatahub-io/disconnected-readiness-scorer/.github/workflows/disconnected-readiness-check.yml@v1
+    permissions:
+      contents: read
+    uses: opendatahub-io/disconnected-readiness-scorer/.github/workflows/disconnected-readiness-check.yml@28f88a60c184a9c29e823918f0fba56b32f577e1 # v1
     with:
       rules: ""
