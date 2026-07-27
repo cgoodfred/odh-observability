@@ -674,5 +674,3 @@ func (tc *TestContext) EnsureOperatorInstalled(namespace, name, channel string) 
 	tc.ensureSubscriptionExists(namespace, name, channel)
 	tc.ensureCSVSucceeded(namespace, nn)
 }
-
-

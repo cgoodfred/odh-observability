@@ -5,16 +5,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
 	gTypes "github.com/onsi/gomega/types"
+	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 
-	common "github.com/opendatahub-io/odh-platform-utilities/api/common"
 	"github.com/opendatahub-io/odh-observability/internal/controller/conditions"
 	"github.com/opendatahub-io/odh-observability/internal/controller/gvk"
 	jq "github.com/opendatahub-io/odh-observability/tests/e2e/matchers/jq"
+	common "github.com/opendatahub-io/odh-platform-utilities/api/common"
 
 	. "github.com/onsi/gomega"
 )
@@ -48,6 +48,7 @@ func monitoringTestSuite(t *testing.T) {
 	monitoringServiceCtx.runPersesTests(t)
 	monitoringServiceCtx.runNetworkingTests(t)
 	monitoringServiceCtx.runWebhookTests(t)
+	monitoringServiceCtx.runUsageLogsCollectionTests(t)
 	monitoringServiceCtx.runNegativeConditionTests(t)
 	monitoringServiceCtx.runDisabledTests(t)
 }
@@ -1960,6 +1961,7 @@ func (tc *MonitoringTestCtx) ValidateMonitoringServiceDisabled(t *testing.T) {
 		{gvk: gvk.TempoStack, name: TempoStackName, namespace: tc.MonitoringNamespace, forceWithFinalizer: true},
 		{gvk: gvk.TempoMonolithic, name: TempoMonolithicName, namespace: tc.MonitoringNamespace, forceWithFinalizer: true},
 		{gvk: gvk.OpenTelemetryCollector, name: OpenTelemetryCollectorName, namespace: tc.MonitoringNamespace},
+		{gvk: gvk.OpenTelemetryCollector, name: UsageLogsCollectorName, namespace: tc.MonitoringNamespace},
 		{gvk: gvk.Instrumentation, name: InstrumentationName, namespace: tc.MonitoringNamespace},
 		{gvk: gvk.Perses, name: PersesName, namespace: tc.MonitoringNamespace},
 		{gvk: gvk.PersesDatasource, name: PersesDatasourceName, namespace: tc.MonitoringNamespace},

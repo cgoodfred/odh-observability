@@ -71,6 +71,13 @@ var (
 		Kind:    "Instrumentation",
 	}
 
+	// LokiStack (loki.grafana.com/v1).
+	LokiStack = schema.GroupVersionKind{
+		Group:   "loki.grafana.com",
+		Version: "v1",
+		Kind:    "LokiStack",
+	}
+
 	// ServiceMonitor (monitoring.rhobs/v1) for RHOBS stack.
 	ServiceMonitor = schema.GroupVersionKind{
 		Group:   "monitoring.rhobs",
@@ -287,6 +294,6 @@ var (
 
 	// Convenience aliases matching the latest API version.
 
-	Perses          = PersesV1Alpha2
+	Perses           = PersesV1Alpha2
 	PersesDatasource = PersesDatasourceV1Alpha2
 )

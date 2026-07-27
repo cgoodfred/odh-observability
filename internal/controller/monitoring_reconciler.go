@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
@@ -56,7 +57,9 @@ import (
 	"github.com/opendatahub-io/odh-observability/internal/controller/conditions"
 )
 
-const monitoringFinalizer = "monitoring.opendatahub.io/cleanup"
+const (
+	monitoringFinalizer = "monitoring.opendatahub.io/cleanup"
+)
 
 // MonitoringReconciler reconciles a Monitoring object.
 type MonitoringReconciler struct {
@@ -72,6 +75,7 @@ type MonitoringReconciler struct {
 // +kubebuilder:rbac:groups=services.platform.opendatahub.io,resources=monitorings/finalizers,verbs=update
 // +kubebuilder:rbac:groups=monitoring.rhobs,resources=monitoringstacks;thanosqueriers;servicemonitors;prometheusrules,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=tempo.grafana.com,resources=tempomonolithics;tempostacks,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=loki.grafana.com,resources=lokistacks,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=opentelemetry.io,resources=opentelemetrycollectors;instrumentations,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=perses.dev,resources=perses;persesdatasources;persesdashboards,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=admissionregistration.k8s.io,resources=validatingadmissionpolicies;validatingadmissionpolicybindings;mutatingwebhookconfigurations,verbs=get;list;watch;create;update;patch;delete
@@ -204,6 +208,8 @@ func (r *MonitoringReconciler) reconcile(ctx context.Context, monitoring *v1alph
 		deployMonitoringStackWithQuerierAndRestrictions,
 		deployTracingStack,
 		deployOpenTelemetryCollector,
+		deployUsageLogsCollector,
+		deployLokiStack,
 		deployAlerting,
 		deployNodeMetricsEndpoint,
 	} {
@@ -257,7 +263,30 @@ func (r *MonitoringReconciler) reconcile(ctx context.Context, monitoring *v1alph
 		log.Error(err, "Failed to sync status URL")
 	}
 
+	// Update usageLogsEndpoint in status only when LokiStack is ready
+	requeueNeeded := false
+	if monitoring.Spec.UsageLogs != nil && monitoring.Spec.UsageLogs.Storage != nil {
+		lokiReady, err := isLokiStackReady(ctx, r.Client, monitoring)
+		if err != nil {
+			log.Error(err, "Failed to check LokiStack readiness")
+			cm.MarkFalse(string(platformcommon.ConditionTypeReady), "LokiStackReadinessCheckFailed", err.Error())
+			return ctrl.Result{}, err
+		}
+		if lokiReady {
+			monitoring.Status.UsageLogsEndpoint = data["UsageLogsEndpoint"].(string)
+		} else {
+			monitoring.Status.UsageLogsEndpoint = ""
+			requeueNeeded = true // Requeue to check again when LokiStack becomes ready
+		}
+	} else {
+		monitoring.Status.UsageLogsEndpoint = ""
+	}
+
 	cm.AggregateReady()
+
+	if requeueNeeded {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
 	return ctrl.Result{}, nil
 }
 

@@ -69,6 +69,9 @@ const (
 	WebhookServiceTemplate                        = "resources/webhook-service.tmpl.yaml"
 	WebhookCertManagerTemplate                    = "resources/webhook-cert-manager.tmpl.yaml"
 	WebhookConfigurationTemplate                  = "resources/webhook-configuration.tmpl.yaml"
+	UsageLogsOpenTelemetryCollectorTemplate       = "resources/usage-logs-opentelemetry-collector.tmpl.yaml"
+	UsageLogsOpenTelemetryCollectorRBACTemplate   = "resources/usage-logs-opentelemetry-collector-rbac.tmpl.yaml"
+	LokiStackTemplate                             = "resources/loki-stack.tmpl.yaml"
 
 	PersesTempoDatasourceName = "tempo-datasource"
 	PersesTempoDashboardName  = "data-science-tempo-traces"
@@ -453,6 +456,91 @@ func deployNodeMetricsEndpoint(
 	return nil
 }
 
+// deployUsageLogsCollector deploys the usage logs OpenTelemetry collector when usage logs are configured.
+func deployUsageLogsCollector(
+	ctx context.Context,
+	c client.Client,
+	monitoring *v1alpha1.Monitoring,
+	cm *conditions.ConditionsManager,
+	sources *[]rendertemplate.TemplateSource,
+) error {
+	if monitoring.Spec.UsageLogs == nil || monitoring.Spec.UsageLogs.Storage == nil {
+		cm.MarkNotConfigured(conditions.ConditionUsageLogsCollectorAvailable,
+			"UsageLogsNotConfigured", "Usage logs not configured in Monitoring CR")
+		return nil
+	}
+
+	// Wait for LokiStack endpoint to be available in status (set only when Loki is ready)
+	if monitoring.Status.UsageLogsEndpoint == "" {
+		cm.MarkFalse(conditions.ConditionUsageLogsCollectorAvailable,
+			"LokiStackNotReady",
+			"Waiting for LokiStack to be ready")
+		return nil
+	}
+
+	otcExists, err := hasCRD(ctx, c, gvk.OpenTelemetryCollector)
+	if err != nil {
+		return fmt.Errorf("checking OpenTelemetryCollector CRD: %w", err)
+	}
+	if !otcExists {
+		cm.MarkFalse(conditions.ConditionUsageLogsCollectorAvailable,
+			"OpenTelemetryCollectorCRDNotFound",
+			"OpenTelemetryCollector CRD not found")
+		return nil
+	}
+
+	cm.MarkTrue(conditions.ConditionUsageLogsCollectorAvailable)
+	*sources = append(*sources,
+		src(UsageLogsOpenTelemetryCollectorTemplate),
+		src(UsageLogsOpenTelemetryCollectorRBACTemplate),
+	)
+
+	return nil
+}
+
+// deployLokiStack deploys LokiStack when usage logs storage is configured.
+func deployLokiStack(
+	ctx context.Context,
+	c client.Client,
+	monitoring *v1alpha1.Monitoring,
+	cm *conditions.ConditionsManager,
+	sources *[]rendertemplate.TemplateSource,
+) error {
+	if monitoring.Spec.UsageLogs == nil || monitoring.Spec.UsageLogs.Storage == nil {
+		cm.MarkNotConfigured(conditions.ConditionLokiStackAvailable,
+			"UsageLogsStorageNotConfigured", "Usage logs storage not configured in Monitoring CR")
+		return nil
+	}
+
+	lokiExists, err := hasCRD(ctx, c, gvk.LokiStack)
+	if err != nil {
+		return fmt.Errorf("checking LokiStack CRD: %w", err)
+	}
+	if !lokiExists {
+		cm.MarkFalse(conditions.ConditionLokiStackAvailable,
+			conditions.MissingOperatorReason,
+			"LokiStack operator must be installed for usage logs storage configuration")
+		return nil
+	}
+
+	// Check if LokiStack is actually ready
+	lokiReady, err := isLokiStackReady(ctx, c, monitoring)
+	if err != nil {
+		return fmt.Errorf("checking LokiStack readiness: %w", err)
+	}
+
+	if lokiReady {
+		cm.MarkTrue(conditions.ConditionLokiStackAvailable)
+	} else {
+		cm.MarkFalse(conditions.ConditionLokiStackAvailable,
+			"LokiStackNotReady",
+			"LokiStack is not ready yet")
+	}
+
+	*sources = append(*sources, src(LokiStackTemplate))
+	return nil
+}
+
 // deployWebhookInfrastructure deploys the webhook Service, cert-manager
 // Issuer+Certificate, and MutatingWebhookConfiguration. These resources are
 // managed by the module operator (not the platform chart) so the operator
@@ -627,4 +715,53 @@ func ensureWebhookEnabled(
 	}
 
 	return c.Patch(ctx, dep, patch)
+}
+
+// isLokiStackReady checks if the LokiStack CR exists and is in a Ready state.
+func isLokiStackReady(ctx context.Context, c client.Client, monitoring *v1alpha1.Monitoring) (bool, error) {
+	lokiStack := &unstructured.Unstructured{}
+	lokiStack.SetGroupVersionKind(gvk.LokiStack)
+
+	namespace := monitoring.Spec.Namespace
+	if namespace == "" {
+		namespace = "opendatahub"
+	}
+
+	err := c.Get(ctx, types.NamespacedName{
+		Name:      "data-science-lokistack",
+		Namespace: namespace,
+	}, lokiStack)
+
+	if err != nil {
+		if k8serr.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+
+	// Check if LokiStack has Ready condition set to True
+	conditions, found, err := unstructured.NestedSlice(lokiStack.Object, "status", "conditions")
+	if err != nil {
+		return false, fmt.Errorf("malformed LokiStack status.conditions: %w", err)
+	}
+	if !found {
+		// No conditions field means LokiStack not ready yet (normal state)
+		return false, nil
+	}
+
+	for _, cond := range conditions {
+		condMap, ok := cond.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		condType, _, _ := unstructured.NestedString(condMap, "type")
+		condStatus, _, _ := unstructured.NestedString(condMap, "status")
+
+		if condType == "Ready" && condStatus == "True" {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }

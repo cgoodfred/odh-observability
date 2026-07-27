@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.20.1
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: monitorings.services.platform.opendatahub.io
 spec:
   group: services.platform.opendatahub.io
@@ -198,6 +198,50 @@ spec:
                 required:
                 - storage
                 type: object
+              usageLogs:
+                description: UsageLogs configures usage log collection and forwarding
+                  to Loki.
+                properties:
+                  storage:
+                    description: |-
+                      Storage configures the LokiStack storage backend (S3).
+                      When configured, the operator deploys a LokiStack instance and auto-configures the collector endpoint.
+                    properties:
+                      credentialMode:
+                        default: static
+                        description: |-
+                          CredentialMode specifies how credentials are provided to LokiStack.
+                          Valid values: "static", "token", "token-cco".
+                        enum:
+                        - static
+                        - token
+                        - token-cco
+                        type: string
+                      secretName:
+                        description: |-
+                          SecretName is the name of the Secret containing storage credentials.
+                          For S3: must contain keys: access_key_id, access_key_secret, bucketnames, endpoint, region, insecure, s3ForcePathStyle
+                        maxLength: 253
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                        type: string
+                      storageClassName:
+                        default: gp3-csi
+                        description: StorageClassName specifies the storage class
+                          for LokiStack PVCs.
+                        maxLength: 253
+                        type: string
+                      type:
+                        description: 'Type specifies the storage backend: "s3".'
+                        enum:
+                        - s3
+                        type: string
+                    required:
+                    - secretName
+                    - type
+                    type: object
+                required:
+                - storage
+                type: object
             type: object
             x-kubernetes-validations:
             - message: Alerting configuration requires metrics.storage to be configured
@@ -310,6 +354,11 @@ spec:
                 x-kubernetes-list-type: map
               url:
                 description: URL is the dashboard endpoint when available.
+                type: string
+              usageLogsEndpoint:
+                description: |-
+                  UsageLogsEndpoint is the Loki OTLP endpoint for sending usage logs.
+                  Populated when usageLogs is configured.
                 type: string
             type: object
         type: object

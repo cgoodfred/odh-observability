@@ -102,6 +102,7 @@ func buildTemplateData(ctx context.Context, c client.Client, monitoring *v1alpha
 
 	templateData := map[string]any{
 		"Namespace":            monitoring.Spec.Namespace,
+		"GatewayNamespace":     getEnvOrDefault("GATEWAY_NAMESPACE", monitoring.Spec.Namespace),
 		"Traces":               monitoring.Spec.Traces != nil,
 		"Metrics":              monitoring.Spec.Metrics != nil,
 		"AcceleratorMetrics":   monitoring.Spec.Metrics != nil,
@@ -127,6 +128,40 @@ func buildTemplateData(ctx context.Context, c client.Client, monitoring *v1alpha
 		if err := addTracesTemplateData(templateData, traces, monitoring.Spec.Namespace); err != nil {
 			return nil, err
 		}
+	}
+
+	// LokiStack configuration
+	lokiStackName := "data-science-lokistack"
+	templateData["LokiStackName"] = lokiStackName
+
+	templateData["UsageLogsCollectorName"] = "usage-logs"
+	if usageLogs := monitoring.Spec.UsageLogs; usageLogs != nil && usageLogs.Storage != nil {
+		templateData["LokiStorageCredentialMode"] = usageLogs.Storage.CredentialMode
+		templateData["LokiStorageSecretName"] = usageLogs.Storage.SecretName
+		templateData["LokiStorageType"] = usageLogs.Storage.Type
+
+		// Default to gp3-csi if explicitly set to "" -> otherwise it would add an extra required manual created PV with "" storageclass
+		storageClassName := usageLogs.Storage.StorageClassName
+		if storageClassName == "" {
+			storageClassName = "gp3-csi"
+		}
+		templateData["LokiStorageClassName"] = storageClassName
+
+		// Auto-configure the usage logs collector endpoint to point to the LokiStack gateway
+		namespace := monitoring.Spec.Namespace
+		if namespace == "" {
+			namespace = "opendatahub"
+		}
+		gatewayURL := fmt.Sprintf("https://%s-gateway-http.%s.svc.cluster.local:8080/api/logs/v1/application/otlp", lokiStackName, namespace)
+		templateData["UsageLogs"] = true
+		templateData["UsageLogsEndpoint"] = gatewayURL
+	} else {
+		templateData["UsageLogs"] = false
+		templateData["UsageLogsEndpoint"] = ""
+		templateData["LokiStorageCredentialMode"] = ""
+		templateData["LokiStorageSecretName"] = ""
+		templateData["LokiStorageType"] = ""
+		templateData["LokiStorageClassName"] = ""
 	}
 
 	// Apply SNO-aware defaulting when CollectorReplicas is unset.

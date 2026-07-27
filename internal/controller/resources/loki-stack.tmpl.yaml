@@ -1,0 +1,32 @@
+apiVersion: loki.grafana.com/v1
+kind: LokiStack
+metadata:
+  name: {{.LokiStackName}}
+  namespace: {{.Namespace}}
+spec:
+  limits:
+    global:
+      queries:
+        queryTimeout: 3m
+    tenants:
+      application:
+        otlp:
+          streamLabels:
+            resourceAttributes:
+            - name: kubernetes_namespace_name
+            - name: model
+            - name: subscription
+            - name: response_type
+  managementState: Managed
+  size: 1x.extra-small
+  storage:
+    schemas:
+    - effectiveDate: "2020-10-11"
+      version: v13
+    secret:
+      credentialMode: {{.LokiStorageCredentialMode}}
+      name: {{.LokiStorageSecretName}}
+      type: {{.LokiStorageType}}
+  storageClassName: {{.LokiStorageClassName}}
+  tenants:
+    mode: openshift-logging

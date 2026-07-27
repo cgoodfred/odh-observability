@@ -43,7 +43,7 @@ type ResourceOptions struct {
 	ClientDeleteOptions client.DeleteOption
 	DeleteAllOfOptions  []client.DeleteAllOfOption
 
-	ObjectContent  map[string]any
+	ObjectContent   map[string]any
 	CustomErrorArgs []any
 }
 

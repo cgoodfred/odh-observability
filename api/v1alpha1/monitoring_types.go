@@ -53,6 +53,9 @@ type MonitoringSpec struct {
 	// Traces configures distributed tracing via the Tempo operator.
 	Traces *Traces `json:"traces,omitempty"`
 
+	// UsageLogs configures usage log collection and forwarding to Loki.
+	UsageLogs *UsageLogs `json:"usageLogs,omitempty"`
+
 	// Alerting configures Prometheus alerting rules.
 	Alerting *Alerting `json:"alerting,omitempty"`
 
@@ -136,6 +139,42 @@ type TracesStorage struct {
 	Retention metav1.Duration `json:"retention,omitempty"`
 }
 
+// UsageLogs defines the configuration for usage log collection.
+type UsageLogs struct {
+	// Storage configures the LokiStack storage backend (S3).
+	// When configured, the operator deploys a LokiStack instance and auto-configures the collector endpoint.
+	// +kubebuilder:validation:Required
+	Storage *LokiStorageConfig `json:"storage"`
+}
+
+// LokiStorageConfig defines storage configuration for LokiStack.
+type LokiStorageConfig struct {
+	// Type specifies the storage backend: "s3".
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Enum=s3
+	Type string `json:"type"`
+
+	// SecretName is the name of the Secret containing storage credentials.
+	// For S3: must contain keys: access_key_id, access_key_secret, bucketnames, endpoint, region, insecure, s3ForcePathStyle
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
+	// +kubebuilder:validation:MaxLength=253
+	SecretName string `json:"secretName"`
+
+	// CredentialMode specifies how credentials are provided to LokiStack.
+	// Valid values: "static", "token", "token-cco".
+	// +optional
+	// +kubebuilder:default="static"
+	// +kubebuilder:validation:Enum=static;token;token-cco
+	CredentialMode string `json:"credentialMode,omitempty"`
+
+	// StorageClassName specifies the storage class for LokiStack PVCs.
+	// +optional
+	// +kubebuilder:default="gp3-csi"
+	// +kubebuilder:validation:MaxLength=253
+	StorageClassName string `json:"storageClassName,omitempty"`
+}
+
 // Alerting configures Prometheus alerting rules.
 type Alerting struct{}
 
@@ -148,6 +187,11 @@ type MonitoringStatus struct {
 
 	// URL is the dashboard endpoint when available.
 	URL string `json:"url,omitempty"`
+
+	// UsageLogsEndpoint is the Loki OTLP endpoint for sending usage logs.
+	// Populated when usageLogs is configured.
+	// +optional
+	UsageLogsEndpoint string `json:"usageLogsEndpoint,omitempty"`
 }
 
 //+kubebuilder:object:root=true
