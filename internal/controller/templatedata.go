@@ -344,10 +344,6 @@ func addImageURLs(templateData map[string]any) {
 		"RELATED_IMAGE_OSE_PROM_LABEL_PROXY_IMAGE",
 		"quay.io/prometheuscommunity/prom-label-proxy:v0.12.1",
 	)
-	templateData["CLIImage"] = getEnvOrDefault(
-		"RELATED_IMAGE_CLI_IMAGE",
-		"quay.io/openshift/origin-cli:4.17",
-	)
 }
 
 func getEnvOrDefault(envVar, defaultVal string) string {
@@ -369,7 +365,7 @@ func getPersesImage() string {
 		return image
 	}
 
-	return "registry.redhat.io/cluster-observability-operator/perses-rhel9:1.5.0-1781116652@sha256:27553fd6d4b4983475a0d9a4ccc7d7fa63b1bd4b48f0e5cb2d18963fe232cfd5"
+	return "registry.redhat.io/cluster-observability-operator/perses-rhel9@sha256:27553fd6d4b4983475a0d9a4ccc7d7fa63b1bd4b48f0e5cb2d18963fe232cfd5"
 }
 
 // resolvePersesAPIVersion probes the cluster for the installed Perses CRD API version.

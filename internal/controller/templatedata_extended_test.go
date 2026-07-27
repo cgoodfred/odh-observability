@@ -520,7 +520,6 @@ func TestAddResourceData(t *testing.T) {
 func TestAddImageURLs_Defaults(t *testing.T) {
 	os.Unsetenv("RELATED_IMAGE_ODH_KUBE_RBAC_PROXY_IMAGE")
 	os.Unsetenv("RELATED_IMAGE_OSE_PROM_LABEL_PROXY_IMAGE")
-	os.Unsetenv("RELATED_IMAGE_CLI_IMAGE")
 
 	data := make(map[string]any)
 	addImageURLs(data)
@@ -531,15 +530,11 @@ func TestAddImageURLs_Defaults(t *testing.T) {
 	if data["PromLabelProxyImage"] == "" {
 		t.Error("PromLabelProxyImage should have a default")
 	}
-	if data["CLIImage"] == "" {
-		t.Error("CLIImage should have a default")
-	}
 }
 
 func TestAddImageURLs_OverriddenByEnv(t *testing.T) {
 	t.Setenv("RELATED_IMAGE_ODH_KUBE_RBAC_PROXY_IMAGE", "custom-proxy:latest")
 	t.Setenv("RELATED_IMAGE_OSE_PROM_LABEL_PROXY_IMAGE", "custom-prom-proxy:latest")
-	t.Setenv("RELATED_IMAGE_CLI_IMAGE", "custom-cli:latest")
 
 	data := make(map[string]any)
 	addImageURLs(data)
@@ -549,9 +544,6 @@ func TestAddImageURLs_OverriddenByEnv(t *testing.T) {
 	}
 	if data["PromLabelProxyImage"] != "custom-prom-proxy:latest" {
 		t.Errorf("PromLabelProxyImage: want custom-prom-proxy:latest, got %v", data["PromLabelProxyImage"])
-	}
-	if data["CLIImage"] != "custom-cli:latest" {
-		t.Errorf("CLIImage: want custom-cli:latest, got %v", data["CLIImage"])
 	}
 }
 
