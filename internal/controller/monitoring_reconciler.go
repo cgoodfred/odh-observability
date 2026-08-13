@@ -61,6 +61,10 @@ const (
 	platformType        = "OpenDataHub"
 )
 
+func operatorVersion() string {
+	return os.Getenv("OPERATOR_VERSION")
+}
+
 // MonitoringReconciler reconciles a Monitoring object.
 type MonitoringReconciler struct {
 	client.Client
@@ -157,7 +161,7 @@ func (r *MonitoringReconciler) reconcile(ctx context.Context, monitoring *v1alph
 			Releases: []platformcommon.ComponentRelease{{
 				Name:    v1alpha1.MonitoringServiceName,
 				RepoURL: "https://github.com/opendatahub-io/odh-observability",
-				Version: os.Getenv("OPERATOR_VERSION"),
+				Version: operatorVersion(),
 			}},
 		})
 	}()
@@ -240,7 +244,7 @@ func (r *MonitoringReconciler) reconcile(ctx context.Context, monitoring *v1alph
 	if err := r.Deployer.Deploy(ctx, deploy.DeployInput{
 		Client:    r.Client,
 		Owner:     monitoring,
-		Release:   deploy.ReleaseInfo{Type: platformType, Version: os.Getenv("OPERATOR_VERSION")},
+		Release:   deploy.ReleaseInfo{Type: "OpenDataHub", Version: operatorVersion()},
 		Resources: desired,
 	}); err != nil {
 		return ctrl.Result{}, fmt.Errorf("applying resources: %w", err)
@@ -335,8 +339,8 @@ func (r *MonitoringReconciler) collectGarbage(ctx context.Context, monitoring *v
 		DynamicClient:   r.DynamicClient,
 		DiscoveryClient: r.DiscoveryClient,
 		Owner:           monitoring,
-		Version:         os.Getenv("OPERATOR_VERSION"),
-		PlatformType:    platformType,
+		Version:         operatorVersion(),
+		PlatformType:    "OpenDataHub",
 	})
 }
 
@@ -357,8 +361,8 @@ func (r *MonitoringReconciler) deleteAllOwned(ctx context.Context, monitoring *v
 		DynamicClient:   r.DynamicClient,
 		DiscoveryClient: r.DiscoveryClient,
 		Owner:           monitoring,
-		Version:         os.Getenv("OPERATOR_VERSION"),
-		PlatformType:    platformType,
+		Version:         operatorVersion(),
+		PlatformType:    "OpenDataHub",
 	})
 }
 
