@@ -4,6 +4,7 @@ vendor/
 
 # Go test/coverage output
 cover.out
+e2e-artifacts/
 covmeta*
 covcounters*
 **/*.test
