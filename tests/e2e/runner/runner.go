@@ -217,6 +217,7 @@ func (r *Runner) envToFlags() []string {
 		"E2E_TEST_MONITORING_CR_NAME":         "-monitoring-cr-name",
 		"E2E_TEST_INSTALL_OPERATORS":          "-install-operators",
 		"E2E_TEST_API_MODE":                   "-api-mode",
+		"E2E_TEST_DSCI_CR_NAME":               "-dsci-cr-name",
 		"E2E_TEST_EVENTUALLY_TIMEOUT":         "-eventually-timeout",
 		"E2E_TEST_EVENTUALLY_POLL_INTERVAL":   "-eventually-poll-interval",
 		"E2E_TEST_CONSISTENTLY_TIMEOUT":       "-consistently-timeout",

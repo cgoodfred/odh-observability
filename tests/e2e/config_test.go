@@ -18,6 +18,7 @@ type TestContextConfig struct {
 	monitoringCRName    string
 	installOperators    bool
 	apiMode             string
+	dsciCRName          string
 	Timeouts            TestTimeouts
 }
 
@@ -26,6 +27,7 @@ func (c *TestContextConfig) registerFlags() {
 	flag.StringVar(&c.monitoringCRName, "monitoring-cr-name", "", "name of the Monitoring CR")
 	flag.BoolVar(&c.installOperators, "install-operators", true, "install dependent OLM operators before running tests")
 	flag.StringVar(&c.apiMode, "api-mode", "module", "API mode: 'module' for standalone module CR, 'dsc' for DSC/DSCI integration")
+	flag.StringVar(&c.dsciCRName, "dsci-cr-name", "default-dsci", "name of the DSCInitialization CR (DSC mode only)")
 
 	flag.DurationVar(&c.Timeouts.defaultEventuallyTimeout, "eventually-timeout", 0, "default eventually timeout")
 	flag.DurationVar(&c.Timeouts.defaultEventuallyPollInterval, "eventually-poll-interval", 0, "default eventually poll interval")

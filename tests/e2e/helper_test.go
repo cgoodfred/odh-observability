@@ -79,9 +79,52 @@ var monitoringOwnerReferencesCondition = And(
 	jq.Match(`.metadata.ownerReferences[0].name == "%s"`, MonitoringCRName),
 )
 
+// rebaseForDSCI wraps transforms so they operate on DSCI's .spec.monitoring
+// as if it were .spec on a Monitoring CR. This lets every existing transform
+// function work unchanged in DSC mode.
+func rebaseForDSCI(transforms ...jq.TransformFn) jq.TransformFn {
+	return func(dsci *unstructured.Unstructured) error {
+		monitoring, _, _ := unstructured.NestedMap(dsci.Object, "spec", "monitoring")
+		if monitoring == nil {
+			monitoring = map[string]any{}
+		}
+
+		temp := &unstructured.Unstructured{
+			Object: map[string]any{"spec": monitoring},
+		}
+
+		for _, t := range transforms {
+			if err := t(temp); err != nil {
+				return err
+			}
+		}
+
+		return unstructured.SetNestedField(dsci.Object, temp.Object["spec"], "spec", "monitoring")
+	}
+}
+
 // ensureMonitoringCRExists creates the Monitoring CR if it does not already exist.
+// In DSC mode, it patches the DSCI to enable monitoring and waits for the
+// module handler to create the Monitoring CR.
 func (tc *MonitoringTestCtx) ensureMonitoringCRExists(t *testing.T) {
 	t.Helper()
+
+	if tc.ApiMode == "dsc" {
+		tc.EventuallyResourcePatched(
+			WithMinimalObject(gvk.DSCInitialization, types.NamespacedName{Name: tc.DSCICRName}),
+			WithMutateFunc(func(u *unstructured.Unstructured) error {
+				return rebaseForDSCI(withManagementState(common.Managed))(u)
+			}),
+		)
+
+		tc.EnsureResourceExists(
+			WithMinimalObject(gvk.Monitoring, types.NamespacedName{Name: tc.MonitoringCRName}),
+			WithCondition(jq.Match(`.status.phase == "%s"`, common.PhaseReady)),
+			WithCustomErrorMsg("Monitoring CR should be created by module handler and reach Ready phase"),
+		)
+
+		return
+	}
 
 	tc.EventuallyResourceCreatedOrPatched(
 		WithMinimalObject(gvk.Monitoring, types.NamespacedName{Name: tc.MonitoringCRName}),
@@ -95,7 +138,25 @@ func (tc *MonitoringTestCtx) ensureMonitoringCRExists(t *testing.T) {
 
 // updateMonitoringConfig patches the Monitoring CR with the given transforms
 // and waits for the CR to reach Ready status.
+// In DSC mode, it patches the DSCI instead and waits for the module handler
+// to propagate changes to the Monitoring CR.
 func (tc *MonitoringTestCtx) updateMonitoringConfig(transforms ...jq.TransformFn) {
+	if tc.ApiMode == "dsc" {
+		tc.EventuallyResourcePatched(
+			WithMinimalObject(gvk.DSCInitialization, types.NamespacedName{Name: tc.DSCICRName}),
+			WithMutateFunc(func(u *unstructured.Unstructured) error {
+				return rebaseForDSCI(transforms...)(u)
+			}),
+		)
+
+		tc.EnsureResourceExists(
+			WithMinimalObject(gvk.Monitoring, types.NamespacedName{Name: tc.MonitoringCRName}),
+			WithCondition(jq.Match(`.status.phase == "%s"`, common.PhaseReady)),
+		)
+
+		return
+	}
+
 	tc.updateMonitoringConfigWithOptions(WithMutateFunc(func(u *unstructured.Unstructured) error {
 		return jq.TransformPipeline(transforms...)(u)
 	}))
@@ -194,7 +255,34 @@ func (tc *MonitoringTestCtx) resetMonitoringConfigToManaged() {
 }
 
 // resetMonitoringConfigToRemoved deletes optional config fields and sets managementState=Removed.
+// In DSC mode, it patches the DSCI and waits for the Monitoring CR to reflect NotReady.
 func (tc *MonitoringTestCtx) resetMonitoringConfigToRemoved() {
+	if tc.ApiMode == "dsc" {
+		tc.EventuallyResourcePatched(
+			WithMinimalObject(gvk.DSCInitialization, types.NamespacedName{Name: tc.DSCICRName}),
+			WithMutateFunc(func(u *unstructured.Unstructured) error {
+				return rebaseForDSCI(
+					withManagementState(common.Removed),
+					jq.Transform(`del(.spec.metrics, .spec.traces, .spec.alerting, .spec.collectorReplicas)`),
+				)(u)
+			}),
+		)
+
+		tc.EnsureResourceExists(
+			WithMinimalObject(gvk.Monitoring, types.NamespacedName{Name: tc.MonitoringCRName}),
+			WithCondition(jq.Match(`.status.phase == "%s"`, common.PhaseNotReady)),
+		)
+
+		tc.EnsureResourcesGone(
+			WithMinimalObject(gvk.OpenTelemetryCollector, types.NamespacedName{
+				Name:      OpenTelemetryCollectorName,
+				Namespace: tc.MonitoringNamespace,
+			}),
+		)
+
+		return
+	}
+
 	tc.updateMonitoringConfigWithOptions(
 		WithMutateFunc(func(u *unstructured.Unstructured) error {
 			return jq.TransformPipeline(
@@ -603,6 +691,10 @@ func (tc *MonitoringTestCtx) ensurePrerequisites(t *testing.T) {
 
 	tc.ensureOperatorPodRunning(t)
 	tc.ensureCRDExists(t, gvk.Monitoring)
+
+	if tc.ApiMode == "dsc" {
+		tc.ensureCRDExists(t, gvk.DSCInitialization)
+	}
 
 	if testOpts.installOperators {
 		tc.installDependentOperators(t)

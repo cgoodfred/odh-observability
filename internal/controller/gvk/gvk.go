@@ -22,6 +22,13 @@ import "k8s.io/apimachinery/pkg/runtime/schema"
 
 //nolint:gochecknoglobals
 var (
+	// DSCInitialization (dscinitialization.opendatahub.io/v1) — ODH platform CR.
+	DSCInitialization = schema.GroupVersionKind{
+		Group:   "dscinitialization.opendatahub.io",
+		Version: "v1",
+		Kind:    "DSCInitialization",
+	}
+
 	// Monitoring CR (services.platform.opendatahub.io/v1alpha1).
 	Monitoring = schema.GroupVersionKind{
 		Group:   "services.platform.opendatahub.io",

@@ -29,6 +29,8 @@ type TestContext struct {
 	Timeouts            TestTimeouts
 	MonitoringNamespace string
 	MonitoringCRName    string
+	ApiMode             string
+	DSCICRName          string
 
 	DefaultResourceOpts []ResourceOpts
 }
@@ -69,6 +71,8 @@ func NewTestContext(t *testing.T) (*TestContext, error) {
 		Timeouts:            testOpts.Timeouts,
 		MonitoringNamespace: testOpts.monitoringNamespace,
 		MonitoringCRName:    testOpts.monitoringCRName,
+		ApiMode:             testOpts.apiMode,
+		DSCICRName:          testOpts.dsciCRName,
 	}, nil
 }
 
@@ -539,6 +543,8 @@ func (tc *TestContext) WithT(t *testing.T) *TestContext {
 		Timeouts:            tc.Timeouts,
 		MonitoringNamespace: tc.MonitoringNamespace,
 		MonitoringCRName:    tc.MonitoringCRName,
+		ApiMode:             tc.ApiMode,
+		DSCICRName:          tc.DSCICRName,
 		DefaultResourceOpts: tc.DefaultResourceOpts,
 	}
 }
