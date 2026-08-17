@@ -20,6 +20,8 @@ import (
 	"flag"
 	"os"
 
+	"github.com/opendatahub-io/odh-platform-utilities/pkg/deploy"
+	routev1 "github.com/openshift/api/route/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -36,9 +38,6 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
-
-	"github.com/opendatahub-io/odh-platform-utilities/pkg/deploy"
-	routev1 "github.com/openshift/api/route/v1"
 
 	v1alpha1 "github.com/opendatahub-io/odh-observability/api/v1alpha1"
 	moncontroller "github.com/opendatahub-io/odh-observability/internal/controller"

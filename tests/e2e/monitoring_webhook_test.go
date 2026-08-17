@@ -4,6 +4,7 @@ import (
 	"maps"
 	"testing"
 
+	common "github.com/opendatahub-io/odh-platform-utilities/api/common"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -11,9 +12,8 @@ import (
 
 	"github.com/opendatahub-io/odh-observability/internal/controller/gvk"
 	jq "github.com/opendatahub-io/odh-observability/tests/e2e/matchers/jq"
-	common "github.com/opendatahub-io/odh-platform-utilities/api/common"
 
-	. "github.com/onsi/gomega"
+	. "github.com/onsi/gomega" //nolint:revive // dot import is idiomatic for gomega matchers
 )
 
 const (

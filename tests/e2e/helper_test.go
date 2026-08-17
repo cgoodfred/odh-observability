@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	common "github.com/opendatahub-io/odh-platform-utilities/api/common"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -13,9 +14,8 @@ import (
 
 	"github.com/opendatahub-io/odh-observability/internal/controller/gvk"
 	jq "github.com/opendatahub-io/odh-observability/tests/e2e/matchers/jq"
-	common "github.com/opendatahub-io/odh-platform-utilities/api/common"
 
-	. "github.com/onsi/gomega"
+	. "github.com/onsi/gomega" //nolint:revive // dot import is idiomatic for gomega matchers
 )
 
 // Constants for monitoring resource names.
@@ -123,21 +123,6 @@ func (tc *MonitoringTestCtx) setupMetrics(t *testing.T) {
 	tc.updateMonitoringConfig(
 		withManagementState(common.Managed),
 		tc.withMetricsConfig(),
-	)
-}
-
-// setupTraces enables traces with the specified backend and optional secret.
-func (tc *MonitoringTestCtx) setupTraces(t *testing.T, backend, secretName string) {
-	t.Helper()
-
-	size := ""
-	if backend == TracesStorageBackendPV {
-		size = TracesStorageSize1Gi
-	}
-
-	tc.updateMonitoringConfig(
-		withManagementState(common.Managed),
-		withMonitoringTraces(backend, secretName, size, DefaultRetention),
 	)
 }
 
@@ -370,6 +355,7 @@ func detectExpectedReplicas(t *testing.T, tc *TestContext) int {
 
 // createDummySecret creates a test secret for the specified backend type.
 // For Tempo backends, this routes to tempo-specific helpers.
+//
 // Deprecated: Use createTempoS3Secret, createTempoGCSSecret, or createLokiS3Secret directly.
 func (tc *MonitoringTestCtx) createDummySecret(t *testing.T, backendType, secretName, namespace string) {
 	t.Helper()

@@ -19,9 +19,12 @@ package controller
 import (
 	"context"
 	"embed"
+	"errors"
 	"fmt"
 	"os"
+	"slices"
 
+	rendertemplate "github.com/opendatahub-io/odh-platform-utilities/pkg/render/template"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	k8serr "k8s.io/apimachinery/pkg/api/errors"
@@ -33,7 +36,6 @@ import (
 	v1alpha1 "github.com/opendatahub-io/odh-observability/api/v1alpha1"
 	"github.com/opendatahub-io/odh-observability/internal/controller/conditions"
 	"github.com/opendatahub-io/odh-observability/internal/controller/gvk"
-	rendertemplate "github.com/opendatahub-io/odh-platform-utilities/pkg/render/template"
 )
 
 const (
@@ -636,18 +638,12 @@ func ensureWebhookEnabled(
 	}
 
 	if len(dep.Spec.Template.Spec.Containers) == 0 {
-		return fmt.Errorf("operator Deployment has no containers")
+		return errors.New("operator Deployment has no containers")
 	}
 
 	container := &dep.Spec.Template.Spec.Containers[0]
 
-	hasWebhookArg := false
-	for _, arg := range container.Args {
-		if arg == webhookArgEnabled {
-			hasWebhookArg = true
-			break
-		}
-	}
+	hasWebhookArg := slices.Contains(container.Args, webhookArgEnabled)
 
 	hasPort := false
 	for _, p := range container.Ports {
@@ -750,7 +746,7 @@ func isLokiStackReady(ctx context.Context, c client.Client, monitoring *v1alpha1
 	}
 
 	for _, cond := range conditions {
-		condMap, ok := cond.(map[string]interface{})
+		condMap, ok := cond.(map[string]any)
 		if !ok {
 			continue
 		}
