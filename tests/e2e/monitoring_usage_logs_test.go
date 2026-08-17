@@ -3,15 +3,15 @@ package e2e_test
 import (
 	"testing"
 
+	common "github.com/opendatahub-io/odh-platform-utilities/api/common"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/opendatahub-io/odh-observability/internal/controller/conditions"
 	"github.com/opendatahub-io/odh-observability/internal/controller/gvk"
 	jq "github.com/opendatahub-io/odh-observability/tests/e2e/matchers/jq"
-	common "github.com/opendatahub-io/odh-platform-utilities/api/common"
 
-	. "github.com/onsi/gomega"
+	. "github.com/onsi/gomega" //nolint:revive // dot import is idiomatic for gomega matchers
 )
 
 // ========================================================================
