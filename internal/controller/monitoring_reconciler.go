@@ -23,6 +23,12 @@ import (
 	"os"
 	"time"
 
+	platformcommon "github.com/opendatahub-io/odh-platform-utilities/api/common"
+	"github.com/opendatahub-io/odh-platform-utilities/pkg/controller/gc"
+	"github.com/opendatahub-io/odh-platform-utilities/pkg/deploy"
+	odhLabels "github.com/opendatahub-io/odh-platform-utilities/pkg/metadata/labels"
+	rendertemplate "github.com/opendatahub-io/odh-platform-utilities/pkg/render/template"
+	routev1 "github.com/openshift/api/route/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -46,19 +52,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	platformcommon "github.com/opendatahub-io/odh-platform-utilities/api/common"
-	"github.com/opendatahub-io/odh-platform-utilities/pkg/controller/gc"
-	"github.com/opendatahub-io/odh-platform-utilities/pkg/deploy"
-	odhLabels "github.com/opendatahub-io/odh-platform-utilities/pkg/metadata/labels"
-	rendertemplate "github.com/opendatahub-io/odh-platform-utilities/pkg/render/template"
-	routev1 "github.com/openshift/api/route/v1"
-
 	v1alpha1 "github.com/opendatahub-io/odh-observability/api/v1alpha1"
 	"github.com/opendatahub-io/odh-observability/internal/controller/conditions"
 )
 
 const (
 	monitoringFinalizer = "monitoring.opendatahub.io/cleanup"
+	platformType        = "OpenDataHub"
 )
 
 func operatorVersion() string {
@@ -68,6 +68,7 @@ func operatorVersion() string {
 // MonitoringReconciler reconciles a Monitoring object.
 type MonitoringReconciler struct {
 	client.Client
+
 	Scheme          *runtime.Scheme
 	Deployer        *deploy.Deployer
 	DynamicClient   dynamic.Interface
@@ -154,8 +155,8 @@ func (r *MonitoringReconciler) reconcile(ctx context.Context, monitoring *v1alph
 	cm := conditions.NewConditionsManager(monitoring, monitoring.Generation)
 
 	defer func() {
-		monitoring.Status.Status.ObservedGeneration = monitoring.Generation
-		monitoring.Status.Status.Phase = cm.Phase()
+		monitoring.Status.ObservedGeneration = monitoring.Generation
+		monitoring.Status.Phase = cm.Phase()
 		monitoring.SetReleaseStatus(platformcommon.ComponentReleaseStatus{
 			Releases: []platformcommon.ComponentRelease{{
 				Name:    v1alpha1.MonitoringServiceName,
@@ -243,7 +244,7 @@ func (r *MonitoringReconciler) reconcile(ctx context.Context, monitoring *v1alph
 	if err := r.Deployer.Deploy(ctx, deploy.DeployInput{
 		Client:    r.Client,
 		Owner:     monitoring,
-		Release:   deploy.ReleaseInfo{Type: "OpenDataHub", Version: operatorVersion()},
+		Release:   deploy.ReleaseInfo{Type: platformType, Version: operatorVersion()},
 		Resources: desired,
 	}); err != nil {
 		return ctrl.Result{}, fmt.Errorf("applying resources: %w", err)
@@ -277,7 +278,8 @@ func (r *MonitoringReconciler) reconcile(ctx context.Context, monitoring *v1alph
 			return ctrl.Result{}, err
 		}
 		if lokiReady {
-			monitoring.Status.UsageLogsEndpoint = data["UsageLogsEndpoint"].(string)
+			endpoint, _ := data["UsageLogsEndpoint"].(string)
+			monitoring.Status.UsageLogsEndpoint = endpoint
 		} else {
 			monitoring.Status.UsageLogsEndpoint = ""
 			requeueNeeded = true // Requeue to check again when LokiStack becomes ready
@@ -304,7 +306,7 @@ type resourceKey struct {
 // collectGarbage deletes owned resources not in the desired set using API discovery.
 func (r *MonitoringReconciler) collectGarbage(ctx context.Context, monitoring *v1alpha1.Monitoring, desired []unstructured.Unstructured) error {
 	if monitoring.Spec.Namespace == "" {
-		return fmt.Errorf("monitoring.Spec.Namespace is empty, cannot safely perform garbage collection")
+		return errors.New("monitoring.Spec.Namespace is empty, cannot safely perform garbage collection")
 	}
 
 	desiredSet := make(map[resourceKey]struct{}, len(desired))
@@ -338,14 +340,14 @@ func (r *MonitoringReconciler) collectGarbage(ctx context.Context, monitoring *v
 		DiscoveryClient: r.DiscoveryClient,
 		Owner:           monitoring,
 		Version:         operatorVersion(),
-		PlatformType:    "OpenDataHub",
+		PlatformType:    platformType,
 	})
 }
 
 // deleteAllOwned removes all resources owned by this controller (used on Removed state).
 func (r *MonitoringReconciler) deleteAllOwned(ctx context.Context, monitoring *v1alpha1.Monitoring) error {
 	if monitoring.Spec.Namespace == "" {
-		return fmt.Errorf("monitoring.Spec.Namespace is empty, cannot safely delete owned resources")
+		return errors.New("monitoring.Spec.Namespace is empty, cannot safely delete owned resources")
 	}
 
 	collector := gc.New(
@@ -360,7 +362,7 @@ func (r *MonitoringReconciler) deleteAllOwned(ctx context.Context, monitoring *v
 		DiscoveryClient: r.DiscoveryClient,
 		Owner:           monitoring,
 		Version:         operatorVersion(),
-		PlatformType:    "OpenDataHub",
+		PlatformType:    platformType,
 	})
 }
 
