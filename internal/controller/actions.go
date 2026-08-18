@@ -48,6 +48,7 @@ const (
 	CollectorServiceMonitorsTemplate              = "resources/collector-servicemonitors.tmpl.yaml"
 	CollectorPrometheusServiceTemplate            = "resources/collector-prometheus-service.tmpl.yaml"
 	CollectorRBACTemplate                         = "resources/collector-rbac.tmpl.yaml"
+	CollectorMLflowRBACTemplate                   = "resources/collector-mlflow-rbac.tmpl.yaml"
 	PrometheusRouteTemplate                       = "resources/data-science-prometheus-route.tmpl.yaml"
 	InstrumentationTemplate                       = "resources/instrumentation.tmpl.yaml"
 	PrometheusNamespaceProxyTemplate              = "resources/data-science-prometheus-namespace-proxy.tmpl.yaml"
@@ -241,6 +242,10 @@ func deployOpenTelemetryCollector(
 
 	if monitoring.Spec.Metrics != nil {
 		*sources = append(*sources, src(CollectorPrometheusServiceTemplate))
+	}
+
+	if monitoring.Spec.Traces != nil {
+		*sources = append(*sources, src(CollectorMLflowRBACTemplate))
 	}
 
 	return nil
