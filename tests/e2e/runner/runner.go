@@ -33,16 +33,16 @@ const (
 	envTestCount        = "E2E_COUNT"
 	envTestTimeout      = "E2E_TEST_TIMEOUT"
 
-	envTestMonitoringNamespace     = "E2E_TEST_MONITORING_NAMESPACE"
-	envTestMonitoringCRName        = "E2E_TEST_MONITORING_CR_NAME"
-	envTestInstallOperators        = "E2E_TEST_INSTALL_OPERATORS"
-	envTestAPIMode                 = "E2E_TEST_API_MODE"
-	envTestDSCICRName              = "E2E_TEST_DSCI_CR_NAME"
-	envTestEventuallyTimeout       = "E2E_TEST_EVENTUALLY_TIMEOUT"
-	envTestEventuallyPollInterval  = "E2E_TEST_EVENTUALLY_POLL_INTERVAL"
-	envTestConsistentlyTimeout     = "E2E_TEST_CONSISTENTLY_TIMEOUT"
+	envTestMonitoringNamespace      = "E2E_TEST_MONITORING_NAMESPACE"
+	envTestMonitoringCRName         = "E2E_TEST_MONITORING_CR_NAME"
+	envTestInstallOperators         = "E2E_TEST_INSTALL_OPERATORS"
+	envTestAPIMode                  = "E2E_TEST_API_MODE"
+	envTestDSCICRName               = "E2E_TEST_DSCI_CR_NAME"
+	envTestEventuallyTimeout        = "E2E_TEST_EVENTUALLY_TIMEOUT"
+	envTestEventuallyPollInterval   = "E2E_TEST_EVENTUALLY_POLL_INTERVAL"
+	envTestConsistentlyTimeout      = "E2E_TEST_CONSISTENTLY_TIMEOUT"
 	envTestConsistentlyPollInterval = "E2E_TEST_CONSISTENTLY_POLL_INTERVAL"
-	envTestOLMTimeout              = "E2E_TEST_OLM_TIMEOUT"
+	envTestOLMTimeout               = "E2E_TEST_OLM_TIMEOUT"
 )
 
 // TestPackages is set at build time via -ldflags.
