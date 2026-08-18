@@ -1,6 +1,8 @@
 package runner
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -30,7 +32,7 @@ type TestPackage struct {
 
 func ParsePackages(s string) ([]TestPackage, error) {
 	if s == "" {
-		return nil, fmt.Errorf("testPackages not set (must be set via -ldflags at build time)")
+		return nil, errors.New("testPackages not set (must be set via -ldflags at build time)")
 	}
 	pairs := strings.Split(s, ",")
 	pkgs := make([]TestPackage, 0, len(pairs))
@@ -147,7 +149,7 @@ func (r *Runner) orchestrate(args []string) Result {
 
 	r.logf("running: %s %s", gotestsumBin, strings.Join(cmdArgs, " "))
 
-	cmd := exec.Command(gotestsumBin, cmdArgs...)
+	cmd := exec.CommandContext(context.Background(), gotestsumBin, cmdArgs...) //nolint:gosec // args are constructed internally, not from user input
 	cmd.Stdout = r.stdout
 	cmd.Stderr = r.stderr
 	cmd.Stdin = os.Stdin
@@ -155,7 +157,8 @@ func (r *Runner) orchestrate(args []string) Result {
 	result := Result{JUnitFile: junitFile, JSONFile: jsonFile}
 
 	if err := cmd.Run(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
 			result.ExitCode = exitErr.ExitCode()
 			r.logf("junit: %s", junitFile)
 			r.logf("jsonl: %s", jsonFile)
@@ -188,12 +191,13 @@ func (r *Runner) execPackages(args []string) int {
 
 		r.logf("running: %s %s", test2jsonBin, strings.Join(cmdArgs, " "))
 
-		cmd := exec.Command(test2jsonBin, cmdArgs...)
+		cmd := exec.CommandContext(context.Background(), test2jsonBin, cmdArgs...)
 		cmd.Stdout = r.stdout
 		cmd.Stderr = r.stderr
 
 		if err := cmd.Run(); err != nil {
-			if exitErr, ok := err.(*exec.ExitError); ok {
+			var exitErr *exec.ExitError
+			if errors.As(err, &exitErr) {
 				if code := exitErr.ExitCode(); code > worstCode {
 					worstCode = code
 				}
@@ -222,7 +226,7 @@ func (r *Runner) envToFlags() []string {
 		"E2E_TEST_EVENTUALLY_POLL_INTERVAL":   "-eventually-poll-interval",
 		"E2E_TEST_CONSISTENTLY_TIMEOUT":       "-consistently-timeout",
 		"E2E_TEST_CONSISTENTLY_POLL_INTERVAL": "-consistently-poll-interval",
-		"E2E_TEST_OLM_TIMEOUT":               "-olm-timeout",
+		"E2E_TEST_OLM_TIMEOUT":                "-olm-timeout",
 	}
 
 	var flags []string

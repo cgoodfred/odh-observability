@@ -20,7 +20,6 @@ import (
 
 func (tc *MonitoringTestCtx) runUsageLogsCollectionTests(t *testing.T) {
 	t.Helper()
-	tc = tc.WithT(t)
 
 	// TODO: LokiStack requires a working S3-compatible backend (e.g. MinIO).
 	// The current test secret uses fake credentials against real AWS S3, so
