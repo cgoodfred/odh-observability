@@ -103,26 +103,31 @@ func rebaseForDSCI(transforms ...jq.TransformFn) jq.TransformFn {
 	}
 }
 
+// patchViaDSCI patches the DSCI's .spec.monitoring using rebaseForDSCI and waits
+// for the Monitoring CR to reach the expected phase. This is the single entry
+// point for all DSC-mode DSCI mutations.
+func (tc *MonitoringTestCtx) patchViaDSCI(expectedPhase common.Phase, transforms ...jq.TransformFn) {
+	tc.EventuallyResourcePatched(
+		WithMinimalObject(gvk.DSCInitialization, types.NamespacedName{Name: tc.DSCICRName}),
+		WithMutateFunc(func(u *unstructured.Unstructured) error {
+			return rebaseForDSCI(transforms...)(u)
+		}),
+	)
+
+	tc.EnsureResourceExists(
+		WithMinimalObject(gvk.Monitoring, types.NamespacedName{Name: tc.MonitoringCRName}),
+		WithCondition(jq.Match(`.status.phase == "%s"`, expectedPhase)),
+	)
+}
+
 // ensureMonitoringCRExists creates the Monitoring CR if it does not already exist.
 // In DSC mode, it patches the DSCI to enable monitoring and waits for the
 // module handler to create the Monitoring CR.
 func (tc *MonitoringTestCtx) ensureMonitoringCRExists(t *testing.T) {
 	t.Helper()
 
-	if tc.ApiMode == "dsc" {
-		tc.EventuallyResourcePatched(
-			WithMinimalObject(gvk.DSCInitialization, types.NamespacedName{Name: tc.DSCICRName}),
-			WithMutateFunc(func(u *unstructured.Unstructured) error {
-				return rebaseForDSCI(withManagementState(common.Managed))(u)
-			}),
-		)
-
-		tc.EnsureResourceExists(
-			WithMinimalObject(gvk.Monitoring, types.NamespacedName{Name: tc.MonitoringCRName}),
-			WithCondition(jq.Match(`.status.phase == "%s"`, common.PhaseReady)),
-			WithCustomErrorMsg("Monitoring CR should be created by module handler and reach Ready phase"),
-		)
-
+	if tc.ApiMode == APIModeDSC {
+		tc.patchViaDSCI(common.PhaseReady, withManagementState(common.Managed))
 		return
 	}
 
@@ -141,19 +146,8 @@ func (tc *MonitoringTestCtx) ensureMonitoringCRExists(t *testing.T) {
 // In DSC mode, it patches the DSCI instead and waits for the module handler
 // to propagate changes to the Monitoring CR.
 func (tc *MonitoringTestCtx) updateMonitoringConfig(transforms ...jq.TransformFn) {
-	if tc.ApiMode == "dsc" {
-		tc.EventuallyResourcePatched(
-			WithMinimalObject(gvk.DSCInitialization, types.NamespacedName{Name: tc.DSCICRName}),
-			WithMutateFunc(func(u *unstructured.Unstructured) error {
-				return rebaseForDSCI(transforms...)(u)
-			}),
-		)
-
-		tc.EnsureResourceExists(
-			WithMinimalObject(gvk.Monitoring, types.NamespacedName{Name: tc.MonitoringCRName}),
-			WithCondition(jq.Match(`.status.phase == "%s"`, common.PhaseReady)),
-		)
-
+	if tc.ApiMode == APIModeDSC {
+		tc.patchViaDSCI(common.PhaseReady, transforms...)
 		return
 	}
 
@@ -257,20 +251,10 @@ func (tc *MonitoringTestCtx) resetMonitoringConfigToManaged() {
 // resetMonitoringConfigToRemoved deletes optional config fields and sets managementState=Removed.
 // In DSC mode, it patches the DSCI and waits for the Monitoring CR to reflect NotReady.
 func (tc *MonitoringTestCtx) resetMonitoringConfigToRemoved() {
-	if tc.ApiMode == "dsc" {
-		tc.EventuallyResourcePatched(
-			WithMinimalObject(gvk.DSCInitialization, types.NamespacedName{Name: tc.DSCICRName}),
-			WithMutateFunc(func(u *unstructured.Unstructured) error {
-				return rebaseForDSCI(
-					withManagementState(common.Removed),
-					jq.Transform(`del(.spec.metrics, .spec.traces, .spec.alerting, .spec.collectorReplicas)`),
-				)(u)
-			}),
-		)
-
-		tc.EnsureResourceExists(
-			WithMinimalObject(gvk.Monitoring, types.NamespacedName{Name: tc.MonitoringCRName}),
-			WithCondition(jq.Match(`.status.phase == "%s"`, common.PhaseNotReady)),
+	if tc.ApiMode == APIModeDSC {
+		tc.patchViaDSCI(common.PhaseNotReady,
+			withManagementState(common.Removed),
+			jq.Transform(`del(.spec.metrics, .spec.traces, .spec.alerting, .spec.collectorReplicas, .spec.usageLogs)`),
 		)
 
 		tc.EnsureResourcesGone(
@@ -692,7 +676,7 @@ func (tc *MonitoringTestCtx) ensurePrerequisites(t *testing.T) {
 	tc.ensureOperatorPodRunning(t)
 	tc.ensureCRDExists(t, gvk.Monitoring)
 
-	if tc.ApiMode == "dsc" {
+	if tc.ApiMode == APIModeDSC {
 		tc.ensureCRDExists(t, gvk.DSCInitialization)
 	}
 

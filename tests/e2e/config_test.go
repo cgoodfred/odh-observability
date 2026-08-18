@@ -2,7 +2,14 @@ package e2e_test
 
 import (
 	"flag"
+	"fmt"
 	"time"
+)
+
+// API mode constants for test configuration.
+const (
+	APIModeModule = "module"
+	APIModeDSC    = "dsc"
 )
 
 type TestTimeouts struct {
@@ -22,6 +29,8 @@ type TestContextConfig struct {
 	Timeouts            TestTimeouts
 }
 
+// registerFlags registers test binary flags.
+// These flags are mapped from env vars by runner.envToFlags (tests/e2e/runner/runner.go).
 func (c *TestContextConfig) registerFlags() {
 	flag.StringVar(&c.monitoringNamespace, "monitoring-namespace", "", "namespace where monitoring operands are deployed (auto-detected from CR if omitted)")
 	flag.StringVar(&c.monitoringCRName, "monitoring-cr-name", "", "name of the Monitoring CR")
@@ -34,6 +43,15 @@ func (c *TestContextConfig) registerFlags() {
 	flag.DurationVar(&c.Timeouts.defaultConsistentlyTimeout, "consistently-timeout", 0, "default consistently timeout")
 	flag.DurationVar(&c.Timeouts.defaultConsistentlyPollInterval, "consistently-poll-interval", 0, "default consistently poll interval")
 	flag.DurationVar(&c.Timeouts.olmOperationTimeout, "olm-timeout", 0, "timeout for OLM operator installation")
+}
+
+func (c *TestContextConfig) validate() error {
+	switch c.apiMode {
+	case APIModeModule, APIModeDSC:
+	default:
+		return fmt.Errorf("invalid api-mode %q: must be %q or %q", c.apiMode, APIModeModule, APIModeDSC)
+	}
+	return nil
 }
 
 func (c *TestContextConfig) applyDefaults() {

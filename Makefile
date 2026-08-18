@@ -87,6 +87,7 @@ E2E_ARTIFACTS ?= $(shell pwd)/e2e-artifacts
 e2e-test-container: ## Run containerized e2e tests in module mode (standalone operator).
 	mkdir -p "$(E2E_ARTIFACTS)"
 	$(IMAGE_BUILDER) run --rm \
+		--user "$(shell id -u):$(shell id -g)" \
 		-v "$(KUBECONFIG):/tmp/kubeconfig:ro" \
 		-v "$(E2E_ARTIFACTS):/artifacts" \
 		-e KUBECONFIG=/tmp/kubeconfig \
@@ -99,6 +100,7 @@ e2e-test-container: ## Run containerized e2e tests in module mode (standalone op
 e2e-test-container-dsc: ## Run containerized e2e tests in DSC mode (via ODH platform operator).
 	mkdir -p "$(E2E_ARTIFACTS)"
 	$(IMAGE_BUILDER) run --rm \
+		--user "$(shell id -u):$(shell id -g)" \
 		-v "$(KUBECONFIG):/tmp/kubeconfig:ro" \
 		-v "$(E2E_ARTIFACTS):/artifacts" \
 		-e KUBECONFIG=/tmp/kubeconfig \

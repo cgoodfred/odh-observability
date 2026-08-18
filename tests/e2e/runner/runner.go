@@ -17,6 +17,32 @@ const (
 	defaultArtifactsDir = "/artifacts"
 	defaultResultsDir   = "e2e-results"
 	defaultGotestsumBin = "gotestsum"
+	defaultTestTimeout  = "120m"
+)
+
+// Environment variable names used for runner configuration.
+// Test-flag env vars (envTest*) are translated to test binary flags by envToFlags;
+// the corresponding flag names are registered in tests/e2e/config_test.go.
+const (
+	envArtifacts        = "ARTIFACTS"
+	envResultsDir       = "E2E_RESULTS_DIR"
+	envGotestsumBin     = "E2E_GOTESTSUM_BIN"
+	envTestVerbosity    = "GO_TEST_VERBOSITY"
+	envJUnitProjectName = "E2E_JUNIT_PROJECT_NAME"
+	envTest2JSONBin     = "E2E_TEST2JSON_BIN"
+	envTestCount        = "E2E_COUNT"
+	envTestTimeout      = "E2E_TEST_TIMEOUT"
+
+	envTestMonitoringNamespace     = "E2E_TEST_MONITORING_NAMESPACE"
+	envTestMonitoringCRName        = "E2E_TEST_MONITORING_CR_NAME"
+	envTestInstallOperators        = "E2E_TEST_INSTALL_OPERATORS"
+	envTestAPIMode                 = "E2E_TEST_API_MODE"
+	envTestDSCICRName              = "E2E_TEST_DSCI_CR_NAME"
+	envTestEventuallyTimeout       = "E2E_TEST_EVENTUALLY_TIMEOUT"
+	envTestEventuallyPollInterval  = "E2E_TEST_EVENTUALLY_POLL_INTERVAL"
+	envTestConsistentlyTimeout     = "E2E_TEST_CONSISTENTLY_TIMEOUT"
+	envTestConsistentlyPollInterval = "E2E_TEST_CONSISTENTLY_POLL_INTERVAL"
+	envTestOLMTimeout              = "E2E_TEST_OLM_TIMEOUT"
 )
 
 // TestPackages is set at build time via -ldflags.
@@ -112,11 +138,11 @@ func (r *Runner) initPackages() error {
 }
 
 func (r *Runner) orchestrate(args []string) Result {
-	artifactsDir := envOr("ARTIFACTS", defaultArtifactsDir)
-	resultsDir := filepath.Join(artifactsDir, envOr("E2E_RESULTS_DIR", defaultResultsDir))
-	gotestsumBin := envOr("E2E_GOTESTSUM_BIN", defaultGotestsumBin)
-	goTestVerbosity := envOr("GO_TEST_VERBOSITY", "testname")
-	junitProjectName := envOr("E2E_JUNIT_PROJECT_NAME", "odh-observability")
+	artifactsDir := envOr(envArtifacts, defaultArtifactsDir)
+	resultsDir := filepath.Join(artifactsDir, envOr(envResultsDir, defaultResultsDir))
+	gotestsumBin := envOr(envGotestsumBin, defaultGotestsumBin)
+	goTestVerbosity := envOr(envTestVerbosity, "testname")
+	junitProjectName := envOr(envJUnitProjectName, "odh-observability")
 
 	junitFile := filepath.Join(resultsDir, "junit.xml")
 	jsonFile := filepath.Join(resultsDir, "log.jsonl")
@@ -175,11 +201,12 @@ func (r *Runner) orchestrate(args []string) Result {
 }
 
 func (r *Runner) execPackages(args []string) int {
-	test2jsonBin := envOr("E2E_TEST2JSON_BIN", defaultTest2JSONBin)
-	testCount := envOr("E2E_COUNT", "1")
+	test2jsonBin := envOr(envTest2JSONBin, defaultTest2JSONBin)
+	testCount := envOr(envTestCount, "1")
+	testTimeout := envOr(envTestTimeout, defaultTestTimeout)
 
-	testArgs := make([]string, 0, 2+len(args))
-	testArgs = append(testArgs, "-test.count="+testCount, "-test.v=test2json")
+	testArgs := make([]string, 0, 3+len(args))
+	testArgs = append(testArgs, "-test.count="+testCount, "-test.timeout="+testTimeout, "-test.v=test2json")
 	testArgs = append(testArgs, args...)
 
 	worstCode := 0
@@ -214,19 +241,19 @@ func (r *Runner) execPackages(args []string) int {
 }
 
 // envToFlags translates E2E_TEST_* environment variables into test binary flags.
-// This preserves the container-friendly env var interface from `podman run -e`.
+// The flag names here correspond to those registered in tests/e2e/config_test.go.
 func (r *Runner) envToFlags() []string {
 	envMap := map[string]string{
-		"E2E_TEST_MONITORING_NAMESPACE":       "-monitoring-namespace",
-		"E2E_TEST_MONITORING_CR_NAME":         "-monitoring-cr-name",
-		"E2E_TEST_INSTALL_OPERATORS":          "-install-operators",
-		"E2E_TEST_API_MODE":                   "-api-mode",
-		"E2E_TEST_DSCI_CR_NAME":               "-dsci-cr-name",
-		"E2E_TEST_EVENTUALLY_TIMEOUT":         "-eventually-timeout",
-		"E2E_TEST_EVENTUALLY_POLL_INTERVAL":   "-eventually-poll-interval",
-		"E2E_TEST_CONSISTENTLY_TIMEOUT":       "-consistently-timeout",
-		"E2E_TEST_CONSISTENTLY_POLL_INTERVAL": "-consistently-poll-interval",
-		"E2E_TEST_OLM_TIMEOUT":                "-olm-timeout",
+		envTestMonitoringNamespace:      "-monitoring-namespace",
+		envTestMonitoringCRName:         "-monitoring-cr-name",
+		envTestInstallOperators:         "-install-operators",
+		envTestAPIMode:                  "-api-mode",
+		envTestDSCICRName:               "-dsci-cr-name",
+		envTestEventuallyTimeout:        "-eventually-timeout",
+		envTestEventuallyPollInterval:   "-eventually-poll-interval",
+		envTestConsistentlyTimeout:      "-consistently-timeout",
+		envTestConsistentlyPollInterval: "-consistently-poll-interval",
+		envTestOLMTimeout:               "-olm-timeout",
 	}
 
 	var flags []string
