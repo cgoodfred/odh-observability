@@ -478,8 +478,8 @@ func TestDeployPersesPrometheusIntegration_CRDPresent(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(sources) != 2 {
-		t.Errorf("expected 2 sources (prometheus + cluster prometheus datasource), got %d", len(sources))
+	if len(sources) != 3 {
+		t.Errorf("expected 3 sources (prometheus + cluster prometheus + tenancy datasource), got %d", len(sources))
 	}
 
 	c := findCondition(m, conditions.ConditionPersesPrometheusDataSourceAvailable)
