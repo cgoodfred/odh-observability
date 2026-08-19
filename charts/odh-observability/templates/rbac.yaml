@@ -108,6 +108,10 @@ rules:
   - apiGroups: ["authorization.k8s.io"]
     resources: ["subjectaccessreviews"]
     verbs: ["create"]
+  # Metrics API (operator must hold this to grant it via data-science-metrics-view ClusterRole)
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods"]
+    verbs: ["get", "list", "create"]
   # Non-resource URLs (granted via collector RBAC for k8s API discovery)
   - nonResourceURLs: ["/api", "/metrics", "/apis/*"]
     verbs: ["get"]
