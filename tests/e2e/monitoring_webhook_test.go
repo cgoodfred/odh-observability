@@ -26,6 +26,7 @@ const (
 
 func (tc *MonitoringTestCtx) runWebhookTests(t *testing.T) {
 	t.Helper()
+	tc = tc.WithT(t)
 
 	t.Run("Group 10: Webhooks", func(t *testing.T) {
 		t.Run("Setup", tc.ValidateMonitoringWebhookTestsSetup)
@@ -45,6 +46,7 @@ func (tc *MonitoringTestCtx) runWebhookTests(t *testing.T) {
 
 func (tc *MonitoringTestCtx) createMonitorsEnvironment(t *testing.T, namespaceLabels map[string]string, monitorLabels map[string]string) {
 	t.Helper()
+	tc = tc.WithT(t)
 
 	t.Logf("Pre-test cleanup: removing %s namespace and monitors if they exist", TestNamespaceName)
 	tc.DeleteResource(
@@ -121,6 +123,7 @@ func (tc *MonitoringTestCtx) createMonitorsEnvironment(t *testing.T, namespaceLa
 
 func (tc *MonitoringTestCtx) cleanupMonitoringAdmissionResources(t *testing.T, podMonitorName, serviceMonitorName string) {
 	t.Helper()
+	tc = tc.WithT(t)
 
 	t.Cleanup(func() {
 		if podMonitorName != "" {
@@ -147,6 +150,7 @@ func (tc *MonitoringTestCtx) cleanupMonitoringAdmissionResources(t *testing.T, p
 
 func (tc *MonitoringTestCtx) ValidateMonitoringWebhookTestsSetup(t *testing.T) {
 	t.Helper()
+	tc = tc.WithT(t)
 
 	t.Logf("Setting up webhook tests: enabling monitoring and waiting for ready state")
 
@@ -169,6 +173,7 @@ func (tc *MonitoringTestCtx) ValidateMonitoringWebhookTestsSetup(t *testing.T) {
 
 func (tc *MonitoringTestCtx) ValidateMonitoringLabelValueEnforcementOnNamespace(t *testing.T) {
 	t.Helper()
+	tc = tc.WithT(t)
 
 	tc.DeleteResource(
 		WithMinimalObject(gvk.Namespace, types.NamespacedName{Name: TestNamespaceName}),
@@ -194,6 +199,7 @@ func (tc *MonitoringTestCtx) ValidateMonitoringLabelValueEnforcementOnNamespace(
 
 func (tc *MonitoringTestCtx) ValidateMonitoringLabelValueEnforcementOnMonitors(t *testing.T) {
 	t.Helper()
+	tc = tc.WithT(t)
 
 	tc.DeleteResource(
 		WithMinimalObject(gvk.CoreosPodMonitor, types.NamespacedName{Name: "test-invalid-podmonitor", Namespace: TestNamespaceName}),
@@ -253,6 +259,7 @@ func (tc *MonitoringTestCtx) ValidateMonitoringLabelValueEnforcementOnMonitors(t
 
 func (tc *MonitoringTestCtx) ValidateMonitorLabelInjection(t *testing.T) {
 	t.Helper()
+	tc = tc.WithT(t)
 
 	nsLabels := map[string]string{
 		ODHLabelMonitoring: "true",
@@ -281,6 +288,7 @@ func (tc *MonitoringTestCtx) ValidateMonitorLabelInjection(t *testing.T) {
 
 func (tc *MonitoringTestCtx) ValidateMonitorsCreationWithCustomLabels(t *testing.T) {
 	t.Helper()
+	tc = tc.WithT(t)
 
 	nsLabels := map[string]string{
 		ODHLabelMonitoring: "true",
@@ -322,6 +330,7 @@ func (tc *MonitoringTestCtx) ValidateMonitorsCreationWithCustomLabels(t *testing
 
 func (tc *MonitoringTestCtx) ValidateMonitorLabelInjectionOnUpdate(t *testing.T) {
 	t.Helper()
+	tc = tc.WithT(t)
 
 	nsLabels := map[string]string{
 		"temp-label": "temp-value",
@@ -386,6 +395,7 @@ func (tc *MonitoringTestCtx) ValidateMonitorLabelInjectionOnUpdate(t *testing.T)
 
 func (tc *MonitoringTestCtx) ValidateMonitorLabelInjectionOnUpdateWithCustomLabels(t *testing.T) {
 	t.Helper()
+	tc = tc.WithT(t)
 
 	nsLabels := map[string]string{
 		"temp-label": "temp-value",
@@ -467,6 +477,7 @@ func (tc *MonitoringTestCtx) ValidateMonitorLabelInjectionOnUpdateWithCustomLabe
 
 func (tc *MonitoringTestCtx) ValidateWebhookSkipsNonMonitoredNamespace(t *testing.T) {
 	t.Helper()
+	tc = tc.WithT(t)
 
 	nsLabels := map[string]string{
 		"some-other-label": "value",
@@ -495,6 +506,7 @@ func (tc *MonitoringTestCtx) ValidateWebhookSkipsNonMonitoredNamespace(t *testin
 
 func (tc *MonitoringTestCtx) ValidateWebhookSkipsExplicitlyOptedOutNamespace(t *testing.T) {
 	t.Helper()
+	tc = tc.WithT(t)
 
 	nsLabels := map[string]string{
 		ODHLabelMonitoring: "false",
@@ -523,6 +535,7 @@ func (tc *MonitoringTestCtx) ValidateWebhookSkipsExplicitlyOptedOutNamespace(t *
 
 func (tc *MonitoringTestCtx) ValidateWebhookRespectsUserOptOut(t *testing.T) {
 	t.Helper()
+	tc = tc.WithT(t)
 
 	nsLabels := map[string]string{
 		ODHLabelMonitoring: "true",
@@ -555,6 +568,7 @@ func (tc *MonitoringTestCtx) ValidateWebhookRespectsUserOptOut(t *testing.T) {
 
 func (tc *MonitoringTestCtx) ValidateWebhookIdempotency(t *testing.T) {
 	t.Helper()
+	tc = tc.WithT(t)
 
 	nsLabels := map[string]string{
 		ODHLabelMonitoring: "true",
@@ -587,6 +601,7 @@ func (tc *MonitoringTestCtx) ValidateWebhookIdempotency(t *testing.T) {
 
 func (tc *MonitoringTestCtx) ValidateWebhookSkipsWhenMonitoringDisabled(t *testing.T) {
 	t.Helper()
+	tc = tc.WithT(t)
 
 	t.Cleanup(func() {
 		tc.updateMonitoringConfig(
