@@ -68,13 +68,13 @@ E2E_IMG ?= quay.io/opendatahub/odh-observability-e2e:latest
 
 .PHONY: e2e-image-build
 e2e-image-build: ## Build e2e test container image.
-	$(IMAGE_BUILDER) build --platform $(PLATFORM) \
+	$(IMAGE_BUILDER) build --platform "$(PLATFORM)" \
 		-f Dockerfiles/e2e-tests/e2e-tests.Dockerfile \
-		-t ${E2E_IMG} .
+		-t "$(E2E_IMG)" .
 
 .PHONY: e2e-image-push
 e2e-image-push: ## Push e2e test container image.
-	$(IMAGE_BUILDER) push ${E2E_IMG}
+	$(IMAGE_BUILDER) push "$(E2E_IMG)"
 
 .PHONY: e2e-image
 e2e-image: e2e-image-build e2e-image-push ## Build and push e2e test image.
@@ -95,7 +95,7 @@ e2e-test-container: ## Run containerized e2e tests in module mode (standalone op
 		-e E2E_TEST_API_MODE=module \
 		-e E2E_TEST_INSTALL_OPERATORS=true \
 		-e E2E_TEST_MONITORING_CR_NAME=default-monitoring \
-		$(E2E_IMG)
+		"$(E2E_IMG)"
 
 .PHONY: e2e-test-container-dsc
 e2e-test-container-dsc: ## Run containerized e2e tests in DSC mode (via ODH platform operator).
@@ -109,7 +109,7 @@ e2e-test-container-dsc: ## Run containerized e2e tests in DSC mode (via ODH plat
 		-e E2E_TEST_API_MODE=dsc \
 		-e E2E_TEST_INSTALL_OPERATORS=false \
 		-e E2E_TEST_MONITORING_CR_NAME=default-monitoring \
-		$(E2E_IMG)
+		"$(E2E_IMG)"
 
 ##@ Prometheus Rules
 

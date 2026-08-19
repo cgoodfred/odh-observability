@@ -260,9 +260,9 @@ func TestDeployOpenTelemetryCollector_TracesOnly_CRDPresent(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// 3 base sources + 1 MLflow RBAC (traces enabled, no prometheus service since metrics nil)
-	if len(sources) != 4 {
-		t.Errorf("expected 4 sources for traces-only+OTel, got %d", len(sources))
+	// 3 base sources + 2 traces RBAC (MLflow + Tempo)
+	if len(sources) != 5 {
+		t.Errorf("expected 5 sources for traces-only+OTel, got %d", len(sources))
 	}
 }
 
@@ -285,9 +285,9 @@ func TestDeployOpenTelemetryCollector_MetricsAndTraces_CRDPresent(t *testing.T) 
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// 3 base sources + 1 prometheus service + 1 MLflow RBAC
-	if len(sources) != 5 {
-		t.Errorf("expected 5 sources for metrics+traces+OTel, got %d", len(sources))
+	// 3 base sources + 1 prometheus service + 2 traces RBAC (MLflow + Tempo)
+	if len(sources) != 6 {
+		t.Errorf("expected 6 sources for metrics+traces+OTel, got %d", len(sources))
 	}
 }
 
