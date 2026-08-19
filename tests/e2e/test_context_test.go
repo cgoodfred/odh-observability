@@ -29,6 +29,8 @@ type TestContext struct {
 	Timeouts            TestTimeouts
 	MonitoringNamespace string
 	MonitoringCRName    string
+	ApiMode             string
+	DSCICRName          string
 
 	DefaultResourceOpts []ResourceOpts
 }
@@ -69,6 +71,8 @@ func NewTestContext(t *testing.T) (*TestContext, error) {
 		Timeouts:            testOpts.Timeouts,
 		MonitoringNamespace: testOpts.monitoringNamespace,
 		MonitoringCRName:    testOpts.monitoringCRName,
+		ApiMode:             testOpts.apiMode,
+		DSCICRName:          testOpts.dsciCRName,
 	}, nil
 }
 
@@ -522,10 +526,42 @@ func (tc *TestContext) EnsureResourceConditionMet(
 	tc.EnsureResourceExists(mergedOpts...)
 }
 
+func (tc *TestContext) WithT(t *testing.T) *TestContext {
+	t.Helper()
+
+	g := NewWithT(t)
+	g.SetDefaultEventuallyTimeout(tc.Timeouts.defaultEventuallyTimeout)
+	g.SetDefaultEventuallyPollingInterval(tc.Timeouts.defaultEventuallyPollInterval)
+	g.SetDefaultConsistentlyDuration(tc.Timeouts.defaultConsistentlyTimeout)
+	g.SetDefaultConsistentlyPollingInterval(tc.Timeouts.defaultConsistentlyPollInterval)
+
+	return &TestContext{
+		t:                   t,
+		client:              tc.client,
+		ctx:                 tc.ctx,
+		g:                   g,
+		Timeouts:            tc.Timeouts,
+		MonitoringNamespace: tc.MonitoringNamespace,
+		MonitoringCRName:    tc.MonitoringCRName,
+		ApiMode:             tc.ApiMode,
+		DSCICRName:          tc.DSCICRName,
+		DefaultResourceOpts: tc.DefaultResourceOpts,
+	}
+}
+
 type MonitoringTestCtx struct {
 	*TestContext
 
 	expectedDefaultReplicas int
+}
+
+func (tc *MonitoringTestCtx) WithT(t *testing.T) *MonitoringTestCtx {
+	t.Helper()
+
+	return &MonitoringTestCtx{
+		TestContext:             tc.TestContext.WithT(t),
+		expectedDefaultReplicas: tc.expectedDefaultReplicas,
+	}
 }
 
 func StopErr(err error, format string, args ...any) error {
