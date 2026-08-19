@@ -2,6 +2,7 @@
 IMG ?= quay.io/opendatahub/odh-observability:odh-stable
 PLATFORM ?= linux/amd64
 CGO_ENABLED ?= 1
+IMAGE_BUILDER ?= podman
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
@@ -59,6 +60,56 @@ lint: golangci-lint ## Run golangci-lint against code.
 .PHONY: e2e-test
 e2e-test: ## Run e2e tests against a cluster (requires KUBECONFIG).
 	go test ./tests/e2e/ -v -timeout 120m -count=1 $(E2E_TEST_FLAGS)
+
+##@ E2E Test Image
+
+# E2E Test Image
+E2E_IMG ?= quay.io/opendatahub/odh-observability-e2e:latest
+
+.PHONY: e2e-image-build
+e2e-image-build: ## Build e2e test container image.
+	$(IMAGE_BUILDER) build --platform $(PLATFORM) \
+		-f Dockerfiles/e2e-tests/e2e-tests.Dockerfile \
+		-t ${E2E_IMG} .
+
+.PHONY: e2e-image-push
+e2e-image-push: ## Push e2e test container image.
+	$(IMAGE_BUILDER) push ${E2E_IMG}
+
+.PHONY: e2e-image
+e2e-image: e2e-image-build e2e-image-push ## Build and push e2e test image.
+
+KUBECONFIG ?= $(HOME)/.kube/config
+
+E2E_ARTIFACTS ?= $(shell pwd)/e2e-artifacts
+
+.PHONY: e2e-test-container
+e2e-test-container: ## Run containerized e2e tests in module mode (standalone operator).
+	mkdir -p "$(E2E_ARTIFACTS)"
+	$(IMAGE_BUILDER) run --rm \
+		--userns=keep-id \
+		--user "$(shell id -u):$(shell id -g)" \
+		-v "$(KUBECONFIG):/tmp/kubeconfig:ro,z" \
+		-v "$(E2E_ARTIFACTS):/artifacts:Z" \
+		-e KUBECONFIG=/tmp/kubeconfig \
+		-e E2E_TEST_API_MODE=module \
+		-e E2E_TEST_INSTALL_OPERATORS=true \
+		-e E2E_TEST_MONITORING_CR_NAME=default-monitoring \
+		$(E2E_IMG)
+
+.PHONY: e2e-test-container-dsc
+e2e-test-container-dsc: ## Run containerized e2e tests in DSC mode (via ODH platform operator).
+	mkdir -p "$(E2E_ARTIFACTS)"
+	$(IMAGE_BUILDER) run --rm \
+		--userns=keep-id \
+		--user "$(shell id -u):$(shell id -g)" \
+		-v "$(KUBECONFIG):/tmp/kubeconfig:ro,z" \
+		-v "$(E2E_ARTIFACTS):/artifacts:Z" \
+		-e KUBECONFIG=/tmp/kubeconfig \
+		-e E2E_TEST_API_MODE=dsc \
+		-e E2E_TEST_INSTALL_OPERATORS=false \
+		-e E2E_TEST_MONITORING_CR_NAME=default-monitoring \
+		$(E2E_IMG)
 
 ##@ Build
 
@@ -127,7 +178,7 @@ GOLANGCI_LINT ?= $(LOCALBIN)/golangci-lint
 .PHONY: controller-gen
 controller-gen: $(CONTROLLER_GEN) ## Download controller-gen locally if necessary.
 $(CONTROLLER_GEN): $(LOCALBIN)
-	test -s $(LOCALBIN)/controller-gen || GOBIN=$(LOCALBIN) go install sigs.k8s.io/controller-tools/cmd/controller-gen@latest
+	test -s $(LOCALBIN)/controller-gen || GOBIN=$(LOCALBIN) go install sigs.k8s.io/controller-tools/cmd/controller-gen@v0.21.0
 
 .PHONY: golangci-lint
 golangci-lint: $(GOLANGCI_LINT) ## Download golangci-lint locally if necessary.
