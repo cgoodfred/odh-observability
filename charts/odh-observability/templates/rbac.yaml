@@ -25,7 +25,7 @@ rules:
     verbs: ["get", "list", "watch"]
   # OpenShift infrastructure (SNO detection + granted via generate-processors-role)
   - apiGroups: ["config.openshift.io"]
-    resources: ["infrastructures", "infrastructures/status", "endpoints", "pods", "namespaces", "services"]
+    resources: ["apiservers", "infrastructures", "infrastructures/status", "endpoints", "pods", "namespaces", "services"]
     verbs: ["get", "list", "watch"]
   # Tempo
   - apiGroups: ["tempo.grafana.com"]
