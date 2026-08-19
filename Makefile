@@ -88,7 +88,8 @@ e2e-test-container: ## Run containerized e2e tests in module mode (standalone op
 	mkdir -p "$(E2E_ARTIFACTS)"
 	$(IMAGE_BUILDER) run --rm \
 		--userns=keep-id \
-		-v "$(KUBECONFIG):/tmp/kubeconfig:ro" \
+		--user "$(shell id -u):$(shell id -g)" \
+		-v "$(KUBECONFIG):/tmp/kubeconfig:ro,z" \
 		-v "$(E2E_ARTIFACTS):/artifacts:Z" \
 		-e KUBECONFIG=/tmp/kubeconfig \
 		-e E2E_TEST_API_MODE=module \
@@ -101,7 +102,8 @@ e2e-test-container-dsc: ## Run containerized e2e tests in DSC mode (via ODH plat
 	mkdir -p "$(E2E_ARTIFACTS)"
 	$(IMAGE_BUILDER) run --rm \
 		--userns=keep-id \
-		-v "$(KUBECONFIG):/tmp/kubeconfig:ro" \
+		--user "$(shell id -u):$(shell id -g)" \
+		-v "$(KUBECONFIG):/tmp/kubeconfig:ro,z" \
 		-v "$(E2E_ARTIFACTS):/artifacts:Z" \
 		-e KUBECONFIG=/tmp/kubeconfig \
 		-e E2E_TEST_API_MODE=dsc \
