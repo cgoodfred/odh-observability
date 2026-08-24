@@ -31,6 +31,11 @@ rules:
   - apiGroups: ["tempo.grafana.com"]
     resources: ["tempomonolithics", "tempostacks"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Tempo trace-write (operator must hold this to grant it via collector-tempo-rbac ClusterRole)
+  - apiGroups: ["tempo.grafana.com"]
+    resources: ["{{ .Values.operatorNamespace }}"]
+    resourceNames: ["traces"]
+    verbs: ["create"]
   # OpenTelemetry
   - apiGroups: ["opentelemetry.io"]
     resources: ["opentelemetrycollectors", "instrumentations"]
