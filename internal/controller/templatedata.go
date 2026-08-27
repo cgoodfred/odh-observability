@@ -83,6 +83,9 @@ const (
 	maxTotalExporterSize = 51200 // Maximum total size for all exporters combined (50KB).
 )
 
+// dns1123LabelRe matches valid DNS-1123 labels (Kubernetes namespace names).
+var dns1123LabelRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?$`)
+
 var componentIDRE = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*(?:/[A-Za-z0-9][A-Za-z0-9_-]*)?$`)
 
 // buildTemplateData constructs the data map passed to all YAML templates.
@@ -139,20 +142,34 @@ func buildTemplateData(ctx context.Context, c client.Client, monitoring *v1alpha
 	lokiStackName := "data-science-lokistack"
 	templateData["LokiStackName"] = lokiStackName
 
-	templateData["UsageLogsCollectorName"] = "usage-logs"
-	if usageLogs := monitoring.Spec.UsageLogs; usageLogs != nil && usageLogs.Storage != nil {
-		templateData["LokiStorageCredentialMode"] = usageLogs.Storage.CredentialMode
-		templateData["LokiStorageSecretName"] = usageLogs.Storage.SecretName
-		templateData["LokiStorageType"] = usageLogs.Storage.Type
+	// Resolve Loki storage: logs.Storage takes precedence, then usageLogs.Storage
+	var lokiStorage *v1alpha1.LokiStorageConfig
+	if logs := monitoring.Spec.Logs; logs != nil && logs.Storage != nil {
+		lokiStorage = logs.Storage
+	} else if usageLogs := monitoring.Spec.UsageLogs; usageLogs != nil && usageLogs.Storage != nil {
+		lokiStorage = usageLogs.Storage
+	}
 
-		// Default to gp3-csi if explicitly set to "" -> otherwise it would add an extra required manual created PV with "" storageclass
-		storageClassName := usageLogs.Storage.StorageClassName
+	if lokiStorage != nil {
+		templateData["LokiStorageCredentialMode"] = lokiStorage.CredentialMode
+		templateData["LokiStorageSecretName"] = lokiStorage.SecretName
+		templateData["LokiStorageType"] = lokiStorage.Type
+
+		storageClassName := lokiStorage.StorageClassName
 		if storageClassName == "" {
 			storageClassName = "gp3-csi"
 		}
 		templateData["LokiStorageClassName"] = storageClassName
+	} else {
+		templateData["LokiStorageCredentialMode"] = ""
+		templateData["LokiStorageSecretName"] = ""
+		templateData["LokiStorageType"] = ""
+		templateData["LokiStorageClassName"] = ""
+	}
 
-		// Auto-configure the usage logs collector endpoint to point to the LokiStack gateway
+	// Usage logs collector configuration (independent of Loki storage resolution)
+	templateData["UsageLogsCollectorName"] = "usage-logs"
+	if usageLogs := monitoring.Spec.UsageLogs; usageLogs != nil && usageLogs.Storage != nil {
 		namespace := monitoring.Spec.Namespace
 		if namespace == "" {
 			namespace = "opendatahub"
@@ -163,10 +180,35 @@ func buildTemplateData(ctx context.Context, c client.Client, monitoring *v1alpha
 	} else {
 		templateData["UsageLogs"] = false
 		templateData["UsageLogsEndpoint"] = ""
-		templateData["LokiStorageCredentialMode"] = ""
-		templateData["LokiStorageSecretName"] = ""
-		templateData["LokiStorageType"] = ""
-		templateData["LokiStorageClassName"] = ""
+	}
+
+	// Cluster log forwarding configuration
+	clusterLogForwarderName := "data-science-cluster-log-forwarder"
+	templateData["ClusterLogForwarderName"] = clusterLogForwarderName
+	templateData["ClusterLogForwarderServiceAccount"] = clusterLogForwarderName + "-collector"
+
+	if logs := monitoring.Spec.Logs; logs != nil {
+		var namespaces []string
+		if len(logs.InferenceNamespaces) > 0 {
+			for _, ns := range logs.InferenceNamespaces {
+				if dns1123LabelRe.MatchString(ns) {
+					namespaces = append(namespaces, ns)
+				} else {
+					log.Info("Skipping invalid namespace in spec.logs.inferenceNamespaces", "namespace", ns)
+				}
+			}
+			if len(namespaces) == 0 {
+				log.Error(nil, "All configured inferenceNamespaces are invalid, CLF will use operator namespace only")
+			}
+		} else {
+			var err error
+			namespaces, err = discoverInferenceNamespaces(ctx, c)
+			if err != nil {
+				log.Error(err, "Failed to discover inference namespaces, using fallback")
+				namespaces = nil
+			}
+		}
+		templateData["InferenceNamespaces"] = namespaces
 	}
 
 	// Apply SNO-aware defaulting when CollectorReplicas is unset.

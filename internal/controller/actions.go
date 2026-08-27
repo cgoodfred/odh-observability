@@ -77,9 +77,15 @@ const (
 	UsageLogsOpenTelemetryCollectorTemplate          = "resources/usage-logs-opentelemetry-collector.tmpl.yaml"
 	UsageLogsOpenTelemetryCollectorRBACTemplate      = "resources/usage-logs-opentelemetry-collector-rbac.tmpl.yaml"
 	LokiStackTemplate                                = "resources/loki-stack.tmpl.yaml"
+	ClusterLogForwarderTemplate                      = "resources/cluster-log-forwarder.tmpl.yaml"
+	ClusterLogForwarderRBACTemplate                  = "resources/cluster-log-forwarder-rbac.tmpl.yaml"
 
 	PersesTempoDatasourceName = "tempo-datasource"
 	PersesTempoDashboardName  = "data-science-tempo-traces"
+
+	defaultMonitoringNamespace = "opendatahub"
+	conditionTypeReady         = "Ready"
+	conditionStatusTrue        = "True"
 )
 
 //go:embed resources monitoring
@@ -511,7 +517,7 @@ func deployUsageLogsCollector(
 	return nil
 }
 
-// deployLokiStack deploys LokiStack when usage logs storage is configured.
+// deployLokiStack deploys LokiStack when usage logs storage or log forwarding is configured.
 func deployLokiStack(
 	ctx context.Context,
 	c client.Client,
@@ -519,9 +525,11 @@ func deployLokiStack(
 	cm *conditions.ConditionsManager,
 	sources *[]rendertemplate.TemplateSource,
 ) error {
-	if monitoring.Spec.UsageLogs == nil || monitoring.Spec.UsageLogs.Storage == nil {
+	needsLoki := monitoring.Spec.Logs != nil ||
+		(monitoring.Spec.UsageLogs != nil && monitoring.Spec.UsageLogs.Storage != nil)
+	if !needsLoki {
 		cm.MarkNotConfigured(conditions.ConditionLokiStackAvailable,
-			"UsageLogsStorageNotConfigured", "Usage logs storage not configured in Monitoring CR")
+			"LokiNotRequired", "Neither usage logs storage nor log forwarding configured")
 		return nil
 	}
 
@@ -551,6 +559,73 @@ func deployLokiStack(
 	}
 
 	*sources = append(*sources, src(LokiStackTemplate))
+	return nil
+}
+
+// deployClusterLogForwarder deploys the ClusterLogForwarder when logs are configured.
+func deployClusterLogForwarder(
+	ctx context.Context,
+	c client.Client,
+	monitoring *v1alpha1.Monitoring,
+	cm *conditions.ConditionsManager,
+	sources *[]rendertemplate.TemplateSource,
+) error {
+	if monitoring.Spec.Logs == nil {
+		cm.MarkNotConfigured(conditions.ConditionClusterLogForwarderAvailable,
+			"LogsNotConfigured", "Logs not configured in Monitoring CR")
+		return nil
+	}
+
+	logExists, err := hasCRD(ctx, c, gvk.ClusterLogForwarder)
+	if err != nil {
+		return fmt.Errorf("checking ClusterLogForwarder CRD: %w", err)
+	}
+	if !logExists {
+		cm.MarkFalse(conditions.ConditionClusterLogForwarderAvailable,
+			"ClusterLogForwarderCRDNotFound",
+			"ClusterLogForwarder CRD not found")
+		return nil
+	}
+
+	lokiExists, err := hasCRD(ctx, c, gvk.LokiStack)
+	if err != nil {
+		return fmt.Errorf("checking LokiStack CRD: %w", err)
+	}
+	if !lokiExists {
+		cm.MarkFalse(conditions.ConditionClusterLogForwarderAvailable,
+			"LokiStackCRDNotFound",
+			"LokiStack CRD not found")
+		return nil
+	}
+
+	lokiReady, err := isLokiStackReady(ctx, c, monitoring)
+	if err != nil {
+		return fmt.Errorf("checking LokiStack readiness for log forwarding: %w", err)
+	}
+	if !lokiReady {
+		cm.MarkFalse(conditions.ConditionClusterLogForwarderAvailable,
+			"LokiStackNotReady",
+			"LokiStack must be ready before ClusterLogForwarder can be deployed")
+		return nil
+	}
+
+	logReady, err := isClusterLogForwarderReady(ctx, c, monitoring)
+	if err != nil {
+		return fmt.Errorf("checking ClusterLogForwarder readiness: %w", err)
+	}
+
+	if logReady {
+		cm.MarkTrue(conditions.ConditionClusterLogForwarderAvailable)
+	} else {
+		cm.MarkFalse(conditions.ConditionClusterLogForwarderAvailable,
+			"ClusterLogForwarderNotReady",
+			"ClusterLogForwarder is not ready yet")
+	}
+
+	*sources = append(*sources,
+		src(ClusterLogForwarderTemplate),
+		src(ClusterLogForwarderRBACTemplate),
+	)
 	return nil
 }
 
@@ -724,39 +799,23 @@ func ensureWebhookEnabled(
 	return c.Patch(ctx, dep, patch)
 }
 
-// isLokiStackReady checks if the LokiStack CR exists and is in a Ready state.
-func isLokiStackReady(ctx context.Context, c client.Client, monitoring *v1alpha1.Monitoring) (bool, error) {
-	lokiStack := &unstructured.Unstructured{}
-	lokiStack.SetGroupVersionKind(gvk.LokiStack)
-
-	namespace := monitoring.Spec.Namespace
-	if namespace == "" {
-		namespace = "opendatahub"
+func monitoringNamespace(monitoring *v1alpha1.Monitoring) string {
+	if monitoring.Spec.Namespace == "" {
+		return defaultMonitoringNamespace
 	}
+	return monitoring.Spec.Namespace
+}
 
-	err := c.Get(ctx, types.NamespacedName{
-		Name:      "data-science-lokistack",
-		Namespace: namespace,
-	}, lokiStack)
-
+func hasReadyCondition(obj *unstructured.Unstructured) (bool, error) {
+	conds, found, err := unstructured.NestedSlice(obj.Object, "status", "conditions")
 	if err != nil {
-		if k8serr.IsNotFound(err) {
-			return false, nil
-		}
 		return false, err
 	}
-
-	// Check if LokiStack has Ready condition set to True
-	conditions, found, err := unstructured.NestedSlice(lokiStack.Object, "status", "conditions")
-	if err != nil {
-		return false, fmt.Errorf("malformed LokiStack status.conditions: %w", err)
-	}
 	if !found {
-		// No conditions field means LokiStack not ready yet (normal state)
 		return false, nil
 	}
 
-	for _, cond := range conditions {
+	for _, cond := range conds {
 		condMap, ok := cond.(map[string]any)
 		if !ok {
 			continue
@@ -764,11 +823,56 @@ func isLokiStackReady(ctx context.Context, c client.Client, monitoring *v1alpha1
 
 		condType, _, _ := unstructured.NestedString(condMap, "type")
 		condStatus, _, _ := unstructured.NestedString(condMap, "status")
-
-		if condType == "Ready" && condStatus == "True" {
+		if condType == conditionTypeReady && condStatus == conditionStatusTrue {
 			return true, nil
 		}
 	}
 
 	return false, nil
+}
+
+// isLokiStackReady checks if the LokiStack CR exists and is in a Ready state.
+func isLokiStackReady(ctx context.Context, c client.Client, monitoring *v1alpha1.Monitoring) (bool, error) {
+	lokiStack := &unstructured.Unstructured{}
+	lokiStack.SetGroupVersionKind(gvk.LokiStack)
+
+	err := c.Get(ctx, types.NamespacedName{
+		Name:      "data-science-lokistack",
+		Namespace: monitoringNamespace(monitoring),
+	}, lokiStack)
+	if err != nil {
+		if k8serr.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+
+	ready, err := hasReadyCondition(lokiStack)
+	if err != nil {
+		return false, fmt.Errorf("malformed LokiStack status.conditions: %w", err)
+	}
+	return ready, nil
+}
+
+// isClusterLogForwarderReady checks if the ClusterLogForwarder CR exists and is in a Ready state.
+func isClusterLogForwarderReady(ctx context.Context, c client.Client, monitoring *v1alpha1.Monitoring) (bool, error) {
+	clusterLogForwarder := &unstructured.Unstructured{}
+	clusterLogForwarder.SetGroupVersionKind(gvk.ClusterLogForwarder)
+
+	err := c.Get(ctx, types.NamespacedName{
+		Name:      "data-science-cluster-log-forwarder",
+		Namespace: monitoringNamespace(monitoring),
+	}, clusterLogForwarder)
+	if err != nil {
+		if k8serr.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+
+	ready, err := hasReadyCondition(clusterLogForwarder)
+	if err != nil {
+		return false, fmt.Errorf("malformed ClusterLogForwarder status.conditions: %w", err)
+	}
+	return ready, nil
 }
