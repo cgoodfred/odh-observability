@@ -60,6 +60,8 @@ import (
 const (
 	monitoringFinalizer = "monitoring.opendatahub.io/cleanup"
 	platformType        = "OpenDataHub"
+	platformConfigName  = "odh-" + v1alpha1.MonitoringServiceName + "-config"
+	platformVersionKey  = "platformVersion"
 )
 
 func operatorVersion() string {
@@ -159,6 +161,8 @@ func (r *MonitoringReconciler) reconcile(ctx context.Context, monitoring *v1alph
 	log := logf.FromContext(ctx)
 	cm := conditions.NewConditionsManager(monitoring, monitoring.Generation)
 
+	platformVersion := r.readPlatformVersion(ctx)
+
 	defer func() {
 		monitoring.Status.ObservedGeneration = monitoring.Generation
 		monitoring.Status.Phase = cm.Phase()
@@ -169,6 +173,9 @@ func (r *MonitoringReconciler) reconcile(ctx context.Context, monitoring *v1alph
 				Version: operatorVersion(),
 			}},
 		})
+		if platformVersion != "" {
+			monitoring.GetReleaseStatus().SetPlatformRelease(platformVersion)
+		}
 	}()
 
 	// Handle Removed state.
@@ -385,6 +392,23 @@ func (r *MonitoringReconciler) deleteAllOwned(ctx context.Context, monitoring *v
 func (r *MonitoringReconciler) patchStatus(ctx context.Context, orig, updated *v1alpha1.Monitoring) error {
 	patch := client.MergeFrom(orig)
 	return r.Status().Patch(ctx, updated, patch)
+}
+
+// readPlatformVersion reads the platformVersion from the platform config
+// ConfigMap. Returns empty string if the ConfigMap doesn't exist (standalone
+// mode) or doesn't contain the key.
+func (r *MonitoringReconciler) readPlatformVersion(ctx context.Context) string {
+	ns := os.Getenv("POD_NAMESPACE")
+	if ns == "" {
+		return ""
+	}
+
+	var cm corev1.ConfigMap
+	if err := r.Get(ctx, types.NamespacedName{Name: platformConfigName, Namespace: ns}, &cm); err != nil {
+		return ""
+	}
+
+	return cm.Data[platformVersionKey]
 }
 
 // SetupWithManager registers the controller with the manager.
