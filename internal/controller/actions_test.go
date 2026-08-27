@@ -23,11 +23,14 @@ import (
 	platformcommon "github.com/opendatahub-io/odh-platform-utilities/api/common"
 	libconditions "github.com/opendatahub-io/odh-platform-utilities/pkg/controller/conditions"
 	rendertemplate "github.com/opendatahub-io/odh-platform-utilities/pkg/render/template"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/opendatahub-io/odh-observability/api/v1alpha1"
 	"github.com/opendatahub-io/odh-observability/internal/controller/conditions"
@@ -49,6 +52,24 @@ func registerCRDs(s *runtime.Scheme, gvks ...schema.GroupVersionKind) {
 			Kind:    g.Kind + "List",
 		}
 		s.AddKnownTypeWithName(listGVK, &unstructured.UnstructuredList{})
+	}
+}
+
+// missingCRDs returns an interceptor that makes List return NoKindMatchError
+// for the given GVKs, simulating CRDs not installed on the cluster.
+func missingCRDs(gvks ...schema.GroupVersionKind) interceptor.Funcs {
+	missing := make(map[string]schema.GroupKind, len(gvks))
+	for _, g := range gvks {
+		missing[g.Kind+"List"] = schema.GroupKind{Group: g.Group, Kind: g.Kind}
+	}
+	return interceptor.Funcs{
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			kind := list.GetObjectKind().GroupVersionKind().Kind
+			if gk, ok := missing[kind]; ok {
+				return &meta.NoKindMatchError{GroupKind: gk, SearchedVersions: []string{"v1"}}
+			}
+			return c.List(ctx, list, opts...)
+		},
 	}
 }
 
@@ -510,5 +531,382 @@ func TestDeployPersesPrometheusIntegration_CRDPresent(t *testing.T) {
 	c := findCondition(m, conditions.ConditionPersesPrometheusDataSourceAvailable)
 	if c == nil || c.Status != metav1.ConditionTrue {
 		t.Error("PersesPrometheusDataSourceAvailable should be True")
+	}
+}
+
+// --- deployClusterLogForwarder ---
+
+func TestDeployClusterLogForwarder_NoLogs(t *testing.T) {
+	s := newActionsTestScheme(t)
+	m := newMonitoring(v1alpha1.MonitoringInstanceName)
+	m.Spec.Logs = nil
+
+	cm := conditions.NewConditionsManager(m, m.Generation)
+	var sources []rendertemplate.TemplateSource
+
+	err := deployClusterLogForwarder(context.Background(),
+		fake.NewClientBuilder().WithScheme(s).Build(), m, cm, &sources)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(sources) != 0 {
+		t.Errorf("expected no sources when logs is nil, got %d", len(sources))
+	}
+
+	c := findCondition(m, conditions.ConditionClusterLogForwarderAvailable)
+	if c == nil || c.Status != metav1.ConditionFalse || c.Severity != platformcommon.ConditionSeverityInfo {
+		t.Errorf("ClusterLogForwarderAvailable: expected False+Info, got %v", c)
+	}
+}
+
+func TestDeployClusterLogForwarder_CRDPresent(t *testing.T) {
+	s := newActionsTestScheme(t)
+	registerCRDs(s, gvk.ClusterLogForwarder, gvk.LokiStack)
+
+	m := newMonitoring(v1alpha1.MonitoringInstanceName)
+	m.Spec.Logs = &v1alpha1.Logs{}
+
+	readyLoki := &unstructured.Unstructured{}
+	readyLoki.SetGroupVersionKind(gvk.LokiStack)
+	readyLoki.SetName("data-science-lokistack")
+	readyLoki.SetNamespace(m.Spec.Namespace)
+	_ = unstructured.SetNestedSlice(readyLoki.Object, []any{
+		map[string]any{
+			"type":   "Ready",
+			"status": "True",
+		},
+	}, "status", "conditions")
+
+	cm := conditions.NewConditionsManager(m, m.Generation)
+	var sources []rendertemplate.TemplateSource
+
+	cli := fake.NewClientBuilder().WithScheme(s).WithObjects(readyLoki).WithStatusSubresource(readyLoki).Build()
+	err := deployClusterLogForwarder(context.Background(), cli, m, cm, &sources)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(sources) != 2 {
+		t.Errorf("expected 2 sources (CLF + RBAC), got %d", len(sources))
+	}
+}
+
+func TestDeployClusterLogForwarder_CRDMissing(t *testing.T) {
+	s := newActionsTestScheme(t)
+
+	m := newMonitoring(v1alpha1.MonitoringInstanceName)
+	m.Spec.Logs = &v1alpha1.Logs{}
+
+	cm := conditions.NewConditionsManager(m, m.Generation)
+	var sources []rendertemplate.TemplateSource
+
+	cli := fake.NewClientBuilder().WithScheme(s).
+		WithInterceptorFuncs(missingCRDs(gvk.ClusterLogForwarder)).Build()
+	err := deployClusterLogForwarder(context.Background(), cli, m, cm, &sources)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(sources) != 0 {
+		t.Errorf("expected no sources when CLF CRD is missing, got %d", len(sources))
+	}
+
+	c := findCondition(m, conditions.ConditionClusterLogForwarderAvailable)
+	if c == nil {
+		t.Fatal("expected ClusterLogForwarderAvailable condition to be set")
+	}
+	if c.Status != metav1.ConditionFalse {
+		t.Errorf("expected status False, got %s", c.Status)
+	}
+	if c.Reason != "ClusterLogForwarderCRDNotFound" {
+		t.Errorf("expected reason ClusterLogForwarderCRDNotFound, got %s", c.Reason)
+	}
+}
+
+func TestDeployClusterLogForwarder_LokiStackNotReady(t *testing.T) {
+	s := newActionsTestScheme(t)
+	registerCRDs(s, gvk.ClusterLogForwarder, gvk.LokiStack)
+
+	m := newMonitoring(v1alpha1.MonitoringInstanceName)
+	m.Spec.Logs = &v1alpha1.Logs{}
+
+	notReadyLoki := &unstructured.Unstructured{}
+	notReadyLoki.SetGroupVersionKind(gvk.LokiStack)
+	notReadyLoki.SetName("data-science-lokistack")
+	notReadyLoki.SetNamespace(m.Spec.Namespace)
+	_ = unstructured.SetNestedSlice(notReadyLoki.Object, []any{
+		map[string]any{
+			"type":   "Ready",
+			"status": "False",
+		},
+	}, "status", "conditions")
+
+	cm := conditions.NewConditionsManager(m, m.Generation)
+	var sources []rendertemplate.TemplateSource
+
+	cli := fake.NewClientBuilder().WithScheme(s).WithObjects(notReadyLoki).WithStatusSubresource(notReadyLoki).Build()
+	err := deployClusterLogForwarder(context.Background(), cli, m, cm, &sources)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(sources) != 0 {
+		t.Errorf("expected no sources when LokiStack is not ready, got %d", len(sources))
+	}
+
+	c := findCondition(m, conditions.ConditionClusterLogForwarderAvailable)
+	if c == nil {
+		t.Fatal("expected ClusterLogForwarderAvailable condition to be set")
+	}
+	if c.Status != metav1.ConditionFalse {
+		t.Errorf("expected status False, got %s", c.Status)
+	}
+	if c.Reason != "LokiStackNotReady" {
+		t.Errorf("expected reason LokiStackNotReady, got %s", c.Reason)
+	}
+}
+
+func TestDeployClusterLogForwarder_CLFExistsButNotReady(t *testing.T) {
+	s := newActionsTestScheme(t)
+	registerCRDs(s, gvk.ClusterLogForwarder, gvk.LokiStack)
+
+	m := newMonitoring(v1alpha1.MonitoringInstanceName)
+	m.Spec.Logs = &v1alpha1.Logs{}
+
+	// LokiStack is ready.
+	readyLoki := &unstructured.Unstructured{}
+	readyLoki.SetGroupVersionKind(gvk.LokiStack)
+	readyLoki.SetName("data-science-lokistack")
+	readyLoki.SetNamespace(m.Spec.Namespace)
+	_ = unstructured.SetNestedSlice(readyLoki.Object, []any{
+		map[string]any{
+			"type":   "Ready",
+			"status": "True",
+		},
+	}, "status", "conditions")
+
+	notReadyCLF := &unstructured.Unstructured{}
+	notReadyCLF.SetGroupVersionKind(gvk.ClusterLogForwarder)
+	notReadyCLF.SetName("data-science-cluster-log-forwarder")
+	notReadyCLF.SetNamespace(m.Spec.Namespace)
+	_ = unstructured.SetNestedSlice(notReadyCLF.Object, []any{
+		map[string]any{
+			"type":   "Ready",
+			"status": "False",
+		},
+	}, "status", "conditions")
+
+	cm := conditions.NewConditionsManager(m, m.Generation)
+	var sources []rendertemplate.TemplateSource
+
+	cli := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(readyLoki, notReadyCLF).
+		WithStatusSubresource(readyLoki, notReadyCLF).
+		Build()
+	err := deployClusterLogForwarder(context.Background(), cli, m, cm, &sources)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(sources) != 2 {
+		t.Errorf("expected 2 sources (CLF + RBAC) even when CLF is not ready, got %d", len(sources))
+	}
+
+	c := findCondition(m, conditions.ConditionClusterLogForwarderAvailable)
+	if c == nil {
+		t.Fatal("expected ClusterLogForwarderAvailable condition to be set")
+	}
+	if c.Status != metav1.ConditionFalse {
+		t.Errorf("expected status False, got %s", c.Status)
+	}
+	if c.Reason != "ClusterLogForwarderNotReady" {
+		t.Errorf("expected reason ClusterLogForwarderNotReady, got %s", c.Reason)
+	}
+}
+
+func TestDeployClusterLogForwarder_ExplicitInferenceNamespaces(t *testing.T) {
+	s := newActionsTestScheme(t)
+	registerCRDs(s, gvk.ClusterLogForwarder, gvk.LokiStack)
+
+	m := newMonitoring(v1alpha1.MonitoringInstanceName)
+	m.Spec.Logs = &v1alpha1.Logs{
+		Storage:             &v1alpha1.LokiStorageConfig{Type: "s3", SecretName: "loki-s3", CredentialMode: "static"},
+		InferenceNamespaces: []string{"ns-a", "ns-b"},
+	}
+
+	readyLoki := &unstructured.Unstructured{}
+	readyLoki.SetGroupVersionKind(gvk.LokiStack)
+	readyLoki.SetName("data-science-lokistack")
+	readyLoki.SetNamespace(m.Spec.Namespace)
+	_ = unstructured.SetNestedSlice(readyLoki.Object, []any{
+		map[string]any{
+			"type":   "Ready",
+			"status": "True",
+		},
+	}, "status", "conditions")
+
+	cm := conditions.NewConditionsManager(m, m.Generation)
+	var sources []rendertemplate.TemplateSource
+
+	cli := fake.NewClientBuilder().WithScheme(s).WithObjects(readyLoki).WithStatusSubresource(readyLoki).Build()
+	err := deployClusterLogForwarder(context.Background(), cli, m, cm, &sources)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(sources) != 2 {
+		t.Errorf("expected 2 sources, got %d", len(sources))
+	}
+
+	data, err := buildTemplateData(context.Background(), cli, m, "")
+	if err != nil {
+		t.Fatalf("buildTemplateData error: %v", err)
+	}
+
+	ns, ok := data["InferenceNamespaces"].([]string)
+	if !ok {
+		t.Fatal("InferenceNamespaces not found or wrong type in template data")
+	}
+	if len(ns) != 2 || ns[0] != "ns-a" || ns[1] != "ns-b" {
+		t.Errorf("expected [ns-a ns-b], got %v", ns)
+	}
+}
+
+func TestDeployClusterLogForwarder_MaliciousNamespacesFiltered(t *testing.T) {
+	s := newActionsTestScheme(t)
+	registerCRDs(s, gvk.ClusterLogForwarder, gvk.LokiStack)
+
+	m := newMonitoring(v1alpha1.MonitoringInstanceName)
+	m.Spec.Logs = &v1alpha1.Logs{
+		Storage: &v1alpha1.LokiStorageConfig{Type: "s3", SecretName: "loki-s3", CredentialMode: "static"},
+		InferenceNamespaces: []string{
+			"valid-ns",
+			"injection\n---\napiVersion: v1",
+			"UPPERCASE",
+			"also-valid",
+			"-starts-bad",
+		},
+	}
+
+	readyLoki := &unstructured.Unstructured{}
+	readyLoki.SetGroupVersionKind(gvk.LokiStack)
+	readyLoki.SetName("data-science-lokistack")
+	readyLoki.SetNamespace(m.Spec.Namespace)
+	_ = unstructured.SetNestedSlice(readyLoki.Object, []any{
+		map[string]any{
+			"type":   "Ready",
+			"status": "True",
+		},
+	}, "status", "conditions")
+
+	cli := fake.NewClientBuilder().WithScheme(s).WithObjects(readyLoki).WithStatusSubresource(readyLoki).Build()
+	data, err := buildTemplateData(context.Background(), cli, m, "")
+	if err != nil {
+		t.Fatalf("buildTemplateData error: %v", err)
+	}
+
+	ns, ok := data["InferenceNamespaces"].([]string)
+	if !ok {
+		t.Fatal("InferenceNamespaces not found or wrong type in template data")
+	}
+	if len(ns) != 2 {
+		t.Errorf("expected 2 valid namespaces, got %d: %v", len(ns), ns)
+	}
+	for _, n := range ns {
+		if n != "valid-ns" && n != "also-valid" {
+			t.Errorf("unexpected namespace in result: %q", n)
+		}
+	}
+}
+
+func TestDeployClusterLogForwarder_AllNamespacesInvalid(t *testing.T) {
+	s := newActionsTestScheme(t)
+	registerCRDs(s, gvk.ClusterLogForwarder, gvk.LokiStack)
+
+	m := newMonitoring(v1alpha1.MonitoringInstanceName)
+	m.Spec.Logs = &v1alpha1.Logs{
+		Storage: &v1alpha1.LokiStorageConfig{Type: "s3", SecretName: "loki-s3", CredentialMode: "static"},
+		InferenceNamespaces: []string{
+			"UPPERCASE",
+			"-starts-bad",
+			"has\nnewline",
+		},
+	}
+
+	readyLoki := &unstructured.Unstructured{}
+	readyLoki.SetGroupVersionKind(gvk.LokiStack)
+	readyLoki.SetName("data-science-lokistack")
+	readyLoki.SetNamespace(m.Spec.Namespace)
+	_ = unstructured.SetNestedSlice(readyLoki.Object, []any{
+		map[string]any{
+			"type":   "Ready",
+			"status": "True",
+		},
+	}, "status", "conditions")
+
+	cli := fake.NewClientBuilder().WithScheme(s).WithObjects(readyLoki).WithStatusSubresource(readyLoki).Build()
+	data, err := buildTemplateData(context.Background(), cli, m, "")
+	if err != nil {
+		t.Fatalf("buildTemplateData error: %v", err)
+	}
+
+	ns, ok := data["InferenceNamespaces"].([]string)
+	if !ok {
+		t.Fatal("InferenceNamespaces should be a []string (possibly nil)")
+	}
+	if len(ns) != 0 {
+		t.Errorf("expected 0 valid namespaces when all are invalid, got %d: %v", len(ns), ns)
+	}
+}
+
+func TestDeployLokiStack_LogsOnlyNoUsageLogs(t *testing.T) {
+	s := newActionsTestScheme(t)
+	registerCRDs(s, gvk.LokiStack)
+
+	m := newMonitoring(v1alpha1.MonitoringInstanceName)
+	m.Spec.UsageLogs = nil
+	m.Spec.Logs = &v1alpha1.Logs{
+		Storage: &v1alpha1.LokiStorageConfig{
+			Type:             "s3",
+			SecretName:       "logs-only-secret",
+			CredentialMode:   "static",
+			StorageClassName: "gp3-csi",
+		},
+		InferenceNamespaces: []string{"inference-ns"},
+	}
+
+	cm := conditions.NewConditionsManager(m, m.Generation)
+	var sources []rendertemplate.TemplateSource
+
+	cli := fake.NewClientBuilder().WithScheme(s).Build()
+	err := deployLokiStack(context.Background(), cli, m, cm, &sources)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(sources) != 1 {
+		t.Fatalf("expected 1 source (LokiStackTemplate), got %d", len(sources))
+	}
+
+	data, err := buildTemplateData(context.Background(), cli, m, "")
+	if err != nil {
+		t.Fatalf("buildTemplateData error: %v", err)
+	}
+
+	if data["LokiStorageSecretName"] != "logs-only-secret" {
+		t.Errorf("expected LokiStorageSecretName=logs-only-secret, got %v", data["LokiStorageSecretName"])
+	}
+	if data["LokiStorageType"] != "s3" {
+		t.Errorf("expected LokiStorageType=s3, got %v", data["LokiStorageType"])
+	}
+	if data["LokiStorageCredentialMode"] != "static" {
+		t.Errorf("expected LokiStorageCredentialMode=static, got %v", data["LokiStorageCredentialMode"])
+	}
+	if data["LokiStorageClassName"] != "gp3-csi" {
+		t.Errorf("expected LokiStorageClassName=gp3-csi, got %v", data["LokiStorageClassName"])
+	}
+	if data["UsageLogs"] != false {
+		t.Errorf("expected UsageLogs=false when usageLogs is nil, got %v", data["UsageLogs"])
 	}
 }
