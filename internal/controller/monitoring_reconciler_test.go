@@ -60,7 +60,7 @@ func newTestScheme(t *testing.T) *runtime.Scheme {
 
 func newTestReconciler(t *testing.T, s *runtime.Scheme, c client.Client) *MonitoringReconciler {
 	t.Helper()
-	cs := fakeclientset.NewSimpleClientset() //nolint:staticcheck // NewClientset requires generated apply configs not available in this project
+	cs := fakeclientset.NewSimpleClientset()
 	return &MonitoringReconciler{
 		Client:          c,
 		Scheme:          s,
