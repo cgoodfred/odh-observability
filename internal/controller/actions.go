@@ -19,13 +19,10 @@ package controller
 import (
 	"context"
 	"embed"
-	"errors"
 	"fmt"
 	"os"
-	"slices"
 
 	rendertemplate "github.com/opendatahub-io/odh-platform-utilities/pkg/render/template"
-	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	k8serr "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -640,9 +637,9 @@ func deployClusterLogForwarder(
 // controls their lifecycle alongside its own reconciliation.
 //
 // After creating the cert-manager resources, it checks whether the TLS secret
-// has been provisioned. Once the secret is ready, it patches the operator's
-// own Deployment to enable the webhook server (adds volume mount, port, and
-// --enable-webhook=true). The rolling restart makes the webhook live.
+// has been provisioned. The MutatingWebhookConfiguration is only deployed once
+// the TLS cert is ready, preventing failurePolicy:Fail from blocking
+// ServiceMonitor/PodMonitor operations cluster-wide.
 func deployWebhookInfrastructure(
 	ctx context.Context,
 	c client.Client,
@@ -694,119 +691,10 @@ func deployWebhookInfrastructure(
 		return nil
 	}
 
-	if err := ensureWebhookEnabled(ctx, c, operatorName, operatorNamespace, secretName); err != nil {
-		log.Error(err, "Failed to enable webhook on operator Deployment")
-		cm.MarkFalse(conditions.ConditionWebhookAvailable,
-			"DeploymentPatchFailed",
-			fmt.Sprintf("Failed to patch operator Deployment: %v", err))
-		return nil
-	}
-
-	// Deploy the MutatingWebhookConfiguration only after the webhook server
-	// is confirmed live. Deploying it earlier would register failurePolicy:Fail
-	// webhooks that reject all ServiceMonitor/PodMonitor operations cluster-wide
-	// while cert-manager is still provisioning the TLS cert.
 	*sources = append(*sources, src(WebhookConfigurationTemplate))
 
 	cm.MarkTrue(conditions.ConditionWebhookAvailable)
 	return nil
-}
-
-const (
-	webhookArgEnabled    = "--enable-webhook=true"
-	webhookVolumeName    = "webhook-certs"
-	webhookCertMountPath = "/tmp/k8s-webhook-server/serving-certs"
-	webhookPort          = int32(9443)
-)
-
-// ensureWebhookEnabled patches the operator Deployment to enable the webhook
-// server if it isn't already configured. It uses a strategic merge patch to
-// add the webhook arg, port, volume mount, and volume without clobbering
-// fields managed by Helm or other controllers.
-func ensureWebhookEnabled(
-	ctx context.Context,
-	c client.Client,
-	operatorName, operatorNamespace, secretName string,
-) error {
-	dep := &appsv1.Deployment{}
-	if err := c.Get(ctx, types.NamespacedName{Name: operatorName, Namespace: operatorNamespace}, dep); err != nil {
-		return fmt.Errorf("getting operator Deployment: %w", err)
-	}
-
-	if len(dep.Spec.Template.Spec.Containers) == 0 {
-		return errors.New("operator Deployment has no containers")
-	}
-
-	container := &dep.Spec.Template.Spec.Containers[0]
-
-	hasWebhookArg := slices.Contains(container.Args, webhookArgEnabled)
-
-	hasPort := false
-	for _, p := range container.Ports {
-		if p.Name == "webhook" {
-			hasPort = true
-			break
-		}
-	}
-
-	hasMount := false
-	for _, m := range container.VolumeMounts {
-		if m.Name == webhookVolumeName {
-			hasMount = true
-			break
-		}
-	}
-
-	hasVolume := false
-	for _, v := range dep.Spec.Template.Spec.Volumes {
-		if v.Name == webhookVolumeName {
-			hasVolume = true
-			break
-		}
-	}
-
-	if hasWebhookArg && hasPort && hasMount && hasVolume {
-		return nil
-	}
-
-	log := logf.FromContext(ctx)
-	log.Info("Patching operator Deployment to enable webhook",
-		"deployment", operatorName, "namespace", operatorNamespace)
-
-	patch := client.StrategicMergeFrom(dep.DeepCopy())
-
-	if !hasWebhookArg {
-		container.Args = append(container.Args, webhookArgEnabled)
-	}
-
-	if !hasPort {
-		container.Ports = append(container.Ports, corev1.ContainerPort{
-			Name:          "webhook",
-			ContainerPort: webhookPort,
-			Protocol:      corev1.ProtocolTCP,
-		})
-	}
-
-	if !hasMount {
-		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
-			Name:      webhookVolumeName,
-			MountPath: webhookCertMountPath,
-			ReadOnly:  true,
-		})
-	}
-
-	if !hasVolume {
-		dep.Spec.Template.Spec.Volumes = append(dep.Spec.Template.Spec.Volumes, corev1.Volume{
-			Name: webhookVolumeName,
-			VolumeSource: corev1.VolumeSource{
-				Secret: &corev1.SecretVolumeSource{
-					SecretName: secretName,
-				},
-			},
-		})
-	}
-
-	return c.Patch(ctx, dep, patch)
 }
 
 func monitoringNamespace(monitoring *v1alpha1.Monitoring) string {

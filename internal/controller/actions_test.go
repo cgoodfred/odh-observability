@@ -23,7 +23,6 @@ import (
 	platformcommon "github.com/opendatahub-io/odh-platform-utilities/api/common"
 	libconditions "github.com/opendatahub-io/odh-platform-utilities/pkg/controller/conditions"
 	rendertemplate "github.com/opendatahub-io/odh-platform-utilities/pkg/render/template"
-	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -536,29 +535,10 @@ func TestDeployWebhookInfrastructure_TLSSecretReady(t *testing.T) {
 		},
 	}
 
-	dep := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      operatorName,
-			Namespace: operatorNS,
-		},
-		Spec: appsv1.DeploymentSpec{
-			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": operatorName}},
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": operatorName}},
-				Spec: corev1.PodSpec{
-					Containers: []corev1.Container{{
-						Name:  "manager",
-						Image: "test:latest",
-					}},
-				},
-			},
-		},
-	}
-
 	cm := conditions.NewConditionsManager(m, m.Generation)
 	var sources []rendertemplate.TemplateSource
 
-	cli := fake.NewClientBuilder().WithScheme(s).WithObjects(secret, dep).Build()
+	cli := fake.NewClientBuilder().WithScheme(s).WithObjects(secret).Build()
 	err := deployWebhookInfrastructure(context.Background(), cli, m, cm, &sources)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
