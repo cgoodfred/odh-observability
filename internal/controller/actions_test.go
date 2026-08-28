@@ -23,6 +23,8 @@ import (
 	platformcommon "github.com/opendatahub-io/odh-platform-utilities/api/common"
 	libconditions "github.com/opendatahub-io/odh-platform-utilities/pkg/controller/conditions"
 	rendertemplate "github.com/opendatahub-io/odh-platform-utilities/pkg/render/template"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -446,6 +448,111 @@ func TestDeployPerses_CRDPresent(t *testing.T) {
 	persesC := findCondition(m, conditions.ConditionPersesAvailable)
 	if persesC == nil || persesC.Status != metav1.ConditionTrue {
 		t.Error("PersesAvailable should be True")
+	}
+}
+
+// --- deployWebhookInfrastructure ---
+
+func hasSourcePath(sources []rendertemplate.TemplateSource, path string) bool {
+	for _, s := range sources {
+		if s.Path == path {
+			return true
+		}
+	}
+	return false
+}
+
+func TestDeployWebhookInfrastructure_TLSSecretMissing(t *testing.T) {
+	s := newActionsTestScheme(t)
+
+	m := newMonitoring(v1alpha1.MonitoringInstanceName)
+
+	t.Setenv("OPERATOR_NAME", "odh-observability")
+	t.Setenv("POD_NAMESPACE", "test-operator-ns")
+
+	cm := conditions.NewConditionsManager(m, m.Generation)
+	var sources []rendertemplate.TemplateSource
+
+	err := deployWebhookInfrastructure(context.Background(),
+		fake.NewClientBuilder().WithScheme(s).Build(), m, cm, &sources)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(sources) != 2 {
+		t.Errorf("expected 2 sources (Service + CertManager) when TLS secret missing, got %d", len(sources))
+	}
+	if hasSourcePath(sources, WebhookConfigurationTemplate) {
+		t.Error("WebhookConfigurationTemplate must NOT be in sources when TLS secret is missing — " +
+			"deploying a failurePolicy:Fail webhook before the server is live blocks all ServiceMonitor/PodMonitor operations")
+	}
+
+	wc := findCondition(m, conditions.ConditionWebhookAvailable)
+	if wc == nil || wc.Status != metav1.ConditionFalse || wc.Reason != "TLSSecretPending" {
+		t.Errorf("WebhookAvailable: expected False/TLSSecretPending, got %v", wc)
+	}
+}
+
+func TestDeployWebhookInfrastructure_TLSSecretReady(t *testing.T) {
+	s := newActionsTestScheme(t)
+	registerCRDs(s, gvk.CertManagerIssuer)
+
+	m := newMonitoring(v1alpha1.MonitoringInstanceName)
+
+	operatorName := "odh-observability"
+	operatorNS := "test-operator-ns"
+	t.Setenv("OPERATOR_NAME", operatorName)
+	t.Setenv("POD_NAMESPACE", operatorNS)
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      operatorName + "-webhook-cert",
+			Namespace: operatorNS,
+		},
+		Data: map[string][]byte{
+			"tls.crt": []byte("cert-data"),
+			"tls.key": []byte("key-data"),
+		},
+	}
+
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      operatorName,
+			Namespace: operatorNS,
+		},
+		Spec: appsv1.DeploymentSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": operatorName}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": operatorName}},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{
+						Name:  "manager",
+						Image: "test:latest",
+					}},
+				},
+			},
+		},
+	}
+
+	cm := conditions.NewConditionsManager(m, m.Generation)
+	var sources []rendertemplate.TemplateSource
+
+	cli := fake.NewClientBuilder().WithScheme(s).WithObjects(secret, dep).Build()
+	err := deployWebhookInfrastructure(context.Background(), cli, m, cm, &sources)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(sources) != 3 {
+		t.Errorf("expected 3 sources (Service + CertManager + WebhookConfiguration), got %d", len(sources))
+	}
+	if !hasSourcePath(sources, WebhookConfigurationTemplate) {
+		t.Error("WebhookConfigurationTemplate should be in sources after TLS secret is ready")
+	}
+
+	wc := findCondition(m, conditions.ConditionWebhookAvailable)
+	if wc == nil || wc.Status != metav1.ConditionTrue {
+		t.Error("WebhookAvailable should be True")
 	}
 }
 

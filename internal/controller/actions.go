@@ -587,7 +587,6 @@ func deployWebhookInfrastructure(
 	*sources = append(*sources,
 		src(WebhookServiceTemplate),
 		src(WebhookCertManagerTemplate),
-		src(WebhookConfigurationTemplate),
 	)
 
 	operatorName := getEnvOrDefault("OPERATOR_NAME", "odh-observability")
@@ -622,6 +621,12 @@ func deployWebhookInfrastructure(
 			fmt.Sprintf("Failed to patch operator Deployment: %v", err))
 		return nil
 	}
+
+	// Deploy the MutatingWebhookConfiguration only after the webhook server
+	// is confirmed live. Deploying it earlier would register failurePolicy:Fail
+	// webhooks that reject all ServiceMonitor/PodMonitor operations cluster-wide
+	// while cert-manager is still provisioning the TLS cert.
+	*sources = append(*sources, src(WebhookConfigurationTemplate))
 
 	cm.MarkTrue(conditions.ConditionWebhookAvailable)
 	return nil
