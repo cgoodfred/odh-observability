@@ -23,6 +23,7 @@ import (
 	platformcommon "github.com/opendatahub-io/odh-platform-utilities/api/common"
 	libconditions "github.com/opendatahub-io/odh-platform-utilities/pkg/controller/conditions"
 	rendertemplate "github.com/opendatahub-io/odh-platform-utilities/pkg/render/template"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -467,6 +468,75 @@ func TestDeployPerses_CRDPresent(t *testing.T) {
 	persesC := findCondition(m, conditions.ConditionPersesAvailable)
 	if persesC == nil || persesC.Status != metav1.ConditionTrue {
 		t.Error("PersesAvailable should be True")
+	}
+}
+
+// --- deployWebhookInfrastructure ---
+
+func TestDeployWebhookInfrastructure_TLSSecretMissing(t *testing.T) {
+	s := newActionsTestScheme(t)
+
+	m := newMonitoring(v1alpha1.MonitoringInstanceName)
+
+	t.Setenv("OPERATOR_NAME", "odh-observability")
+	t.Setenv("POD_NAMESPACE", "test-operator-ns")
+
+	cm := conditions.NewConditionsManager(m, m.Generation)
+	var sources []rendertemplate.TemplateSource
+
+	err := deployWebhookInfrastructure(context.Background(),
+		fake.NewClientBuilder().WithScheme(s).Build(), m, cm, &sources)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(sources) != 0 {
+		t.Errorf("expected 0 sources (chart deploys webhook resources), got %d", len(sources))
+	}
+
+	wc := findCondition(m, conditions.ConditionWebhookAvailable)
+	if wc == nil || wc.Status != metav1.ConditionFalse || wc.Reason != "TLSSecretPending" {
+		t.Errorf("WebhookAvailable: expected False/TLSSecretPending, got %v", wc)
+	}
+}
+
+func TestDeployWebhookInfrastructure_TLSSecretReady(t *testing.T) {
+	s := newActionsTestScheme(t)
+
+	m := newMonitoring(v1alpha1.MonitoringInstanceName)
+
+	operatorName := "odh-observability"
+	operatorNS := "test-operator-ns"
+	t.Setenv("OPERATOR_NAME", operatorName)
+	t.Setenv("POD_NAMESPACE", operatorNS)
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      operatorName + "-webhook-cert",
+			Namespace: operatorNS,
+		},
+		Data: map[string][]byte{
+			"tls.crt": []byte("cert-data"),
+			"tls.key": []byte("key-data"),
+		},
+	}
+
+	cm := conditions.NewConditionsManager(m, m.Generation)
+	var sources []rendertemplate.TemplateSource
+
+	cli := fake.NewClientBuilder().WithScheme(s).WithObjects(secret).Build()
+	err := deployWebhookInfrastructure(context.Background(), cli, m, cm, &sources)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(sources) != 0 {
+		t.Errorf("expected 0 sources (chart deploys webhook resources), got %d", len(sources))
+	}
+
+	wc := findCondition(m, conditions.ConditionWebhookAvailable)
+	if wc == nil || wc.Status != metav1.ConditionTrue {
+		t.Error("WebhookAvailable should be True")
 	}
 }
 
