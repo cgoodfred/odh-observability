@@ -73,7 +73,6 @@ spec:
         - name: webhook-certs
           secret:
             secretName: {{ include "odh-observability.fullname" . }}-webhook-cert
-            optional: true
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

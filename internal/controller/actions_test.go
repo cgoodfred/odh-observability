@@ -473,15 +473,6 @@ func TestDeployPerses_CRDPresent(t *testing.T) {
 
 // --- deployWebhookInfrastructure ---
 
-func hasSourcePath(sources []rendertemplate.TemplateSource, path string) bool {
-	for _, s := range sources {
-		if s.Path == path {
-			return true
-		}
-	}
-	return false
-}
-
 func TestDeployWebhookInfrastructure_TLSSecretMissing(t *testing.T) {
 	s := newActionsTestScheme(t)
 
@@ -499,12 +490,8 @@ func TestDeployWebhookInfrastructure_TLSSecretMissing(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(sources) != 2 {
-		t.Errorf("expected 2 sources (Service + CertManager) when TLS secret missing, got %d", len(sources))
-	}
-	if hasSourcePath(sources, WebhookConfigurationTemplate) {
-		t.Error("WebhookConfigurationTemplate must NOT be in sources when TLS secret is missing — " +
-			"deploying a failurePolicy:Fail webhook before the server is live blocks all ServiceMonitor/PodMonitor operations")
+	if len(sources) != 0 {
+		t.Errorf("expected 0 sources (chart deploys webhook resources), got %d", len(sources))
 	}
 
 	wc := findCondition(m, conditions.ConditionWebhookAvailable)
@@ -515,7 +502,6 @@ func TestDeployWebhookInfrastructure_TLSSecretMissing(t *testing.T) {
 
 func TestDeployWebhookInfrastructure_TLSSecretReady(t *testing.T) {
 	s := newActionsTestScheme(t)
-	registerCRDs(s, gvk.CertManagerIssuer)
 
 	m := newMonitoring(v1alpha1.MonitoringInstanceName)
 
@@ -544,11 +530,8 @@ func TestDeployWebhookInfrastructure_TLSSecretReady(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(sources) != 3 {
-		t.Errorf("expected 3 sources (Service + CertManager + WebhookConfiguration), got %d", len(sources))
-	}
-	if !hasSourcePath(sources, WebhookConfigurationTemplate) {
-		t.Error("WebhookConfigurationTemplate should be in sources after TLS secret is ready")
+	if len(sources) != 0 {
+		t.Errorf("expected 0 sources (chart deploys webhook resources), got %d", len(sources))
 	}
 
 	wc := findCondition(m, conditions.ConditionWebhookAvailable)

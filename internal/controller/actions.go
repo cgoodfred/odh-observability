@@ -70,9 +70,6 @@ const (
 	TempoServiceCAConfigMapTemplate                  = "resources/tempo-service-ca-configmap.tmpl.yaml"
 	PersesOperatorAccessNetworkPolicyTemplate        = "resources/perses-operator-access-network-policy.tmpl.yaml"
 	OperatorPrometheusRulesTemplate                  = "monitoring/operator-prometheusrules.tmpl.yaml"
-	WebhookServiceTemplate                           = "resources/webhook-service.tmpl.yaml"
-	WebhookCertManagerTemplate                       = "resources/webhook-cert-manager.tmpl.yaml"
-	WebhookConfigurationTemplate                     = "resources/webhook-configuration.tmpl.yaml"
 	UsageLogsOpenTelemetryCollectorTemplate          = "resources/usage-logs-opentelemetry-collector.tmpl.yaml"
 	UsageLogsOpenTelemetryCollectorRBACTemplate      = "resources/usage-logs-opentelemetry-collector-rbac.tmpl.yaml"
 	LokiStackTemplate                                = "resources/loki-stack.tmpl.yaml"
@@ -631,47 +628,26 @@ func deployClusterLogForwarder(
 	return nil
 }
 
-// deployWebhookInfrastructure deploys the webhook Service, cert-manager
-// Issuer+Certificate, and MutatingWebhookConfiguration. These resources are
-// managed by the module operator (not the platform chart) so the operator
-// controls their lifecycle alongside its own reconciliation.
-//
-// After creating the cert-manager resources, it checks whether the TLS secret
-// has been provisioned. The MutatingWebhookConfiguration is only deployed once
-// the TLS cert is ready, preventing failurePolicy:Fail from blocking
-// ServiceMonitor/PodMonitor operations cluster-wide.
+// deployWebhookInfrastructure reports the webhook availability condition.
+// The webhook Service, cert-manager Issuer+Certificate, and
+// MutatingWebhookConfiguration are deployed by the Helm chart, not the
+// reconciler. This function only checks whether the TLS secret has been
+// provisioned by cert-manager so the condition reflects reality.
 func deployWebhookInfrastructure(
 	ctx context.Context,
 	c client.Client,
 	_ *v1alpha1.Monitoring,
 	cm *conditions.ConditionsManager,
-	sources *[]rendertemplate.TemplateSource,
+	_ *[]rendertemplate.TemplateSource,
 ) error {
 	log := logf.FromContext(ctx)
-
-	issuerExists, err := hasCRD(ctx, c, gvk.CertManagerIssuer)
-	if err != nil {
-		return fmt.Errorf("checking Issuer CRD: %w", err)
-	}
-
-	if !issuerExists {
-		cm.MarkNotConfigured(conditions.ConditionWebhookAvailable,
-			"CertManagerNotAvailable",
-			"cert-manager CRDs not found; webhook TLS cannot be provisioned")
-		return nil
-	}
-
-	*sources = append(*sources,
-		src(WebhookServiceTemplate),
-		src(WebhookCertManagerTemplate),
-	)
 
 	operatorName := getEnvOrDefault("OPERATOR_NAME", "odh-observability")
 	operatorNamespace := os.Getenv("POD_NAMESPACE")
 	secretName := operatorName + "-webhook-cert"
 
 	secret := &corev1.Secret{}
-	err = c.Get(ctx, types.NamespacedName{Name: secretName, Namespace: operatorNamespace}, secret)
+	err := c.Get(ctx, types.NamespacedName{Name: secretName, Namespace: operatorNamespace}, secret)
 	if err != nil {
 		if k8serr.IsNotFound(err) {
 			log.Info("webhook TLS secret not yet provisioned by cert-manager, waiting", "secret", secretName)
@@ -690,8 +666,6 @@ func deployWebhookInfrastructure(
 			"TLS secret exists but certificate data not yet populated by cert-manager")
 		return nil
 	}
-
-	*sources = append(*sources, src(WebhookConfigurationTemplate))
 
 	cm.MarkTrue(conditions.ConditionWebhookAvailable)
 	return nil
