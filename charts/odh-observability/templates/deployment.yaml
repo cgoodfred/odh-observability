@@ -28,6 +28,7 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             - --leader-elect={{ .Values.leaderElect }}
+            - --enable-webhook=true
           env:
             - name: POD_NAMESPACE
               valueFrom:
@@ -45,6 +46,9 @@ spec:
             - name: health
               containerPort: 8081
               protocol: TCP
+            - name: webhook
+              containerPort: 9443
+              protocol: TCP
           livenessProbe:
             httpGet:
               path: /healthz
@@ -57,10 +61,18 @@ spec:
               port: health
             initialDelaySeconds: 5
             periodSeconds: 10
+          volumeMounts:
+            - name: webhook-certs
+              mountPath: /tmp/k8s-webhook-server/serving-certs
+              readOnly: true
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           securityContext:
             allowPrivilegeEscalation: false
+      volumes:
+        - name: webhook-certs
+          secret:
+            secretName: {{ include "odh-observability.fullname" . }}-webhook-cert
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
