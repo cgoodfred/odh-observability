@@ -181,13 +181,15 @@ image: docker-build docker-push ## Build and push image with the manager.
 
 HELM_RELEASE ?= odh-observability
 HELM_CHART   ?= charts/odh-observability
-NAMESPACE    ?= opendatahub
+NAMESPACE              ?= opendatahub
+MONITORING_NAMESPACE   ?= $(NAMESPACE)
 
 .PHONY: deploy
 deploy: manifests helm-update-crds ## Deploy operator to cluster via Helm chart.
 	helm upgrade --install $(HELM_RELEASE) $(HELM_CHART) \
 		-n $(NAMESPACE) --create-namespace \
 		--set operatorNamespace=$(NAMESPACE) \
+		--set monitoringNamespace=$(MONITORING_NAMESPACE) \
 		--set image.repository=$(firstword $(subst :, ,$(IMG))) \
 		--set image.tag=$(lastword $(subst :, ,$(IMG)))
 
