@@ -14,6 +14,10 @@
       "type": "string",
       "description": "Namespace for all operator resources"
     },
+    "monitoringNamespace": {
+      "type": "string",
+      "description": "Namespace where Monitoring operands are deployed. Defaults to operatorNamespace when empty."
+    },
     "image": {
       "type": "object",
       "properties": {

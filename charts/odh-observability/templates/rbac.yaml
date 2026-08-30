@@ -31,9 +31,11 @@ rules:
   - apiGroups: ["tempo.grafana.com"]
     resources: ["tempomonolithics", "tempostacks"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  # Tempo trace-write (operator must hold this to grant it via collector-tempo-rbac ClusterRole)
+  # Tempo trace-write (operator must hold this to grant it via collector-tempo-rbac ClusterRole).
+  # Tempo's write ACL uses the monitoring namespace name as the RBAC resource, which
+  # differs from operatorNamespace on RHOAI (applications vs monitoring namespaces).
   - apiGroups: ["tempo.grafana.com"]
-    resources: ["{{ .Values.operatorNamespace }}"]
+    resources: ["{{ include "odh-observability.monitoringNamespace" . }}"]
     resourceNames: ["traces"]
     verbs: ["create"]
   # OpenTelemetry
