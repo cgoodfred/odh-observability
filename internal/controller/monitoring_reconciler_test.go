@@ -487,12 +487,16 @@ func TestReconcile_PlatformVersionNotStampedOnFailedReconcile(t *testing.T) {
 }
 
 // TestPlatformConfigWatch_EnqueuesMonitoring: unlabeled odh-monitoring-config
-// updates must match the name-filtered predicate and map to the Monitoring singleton.
+// updates in POD_NAMESPACE must match the predicate and map to the Monitoring
+// singleton. Same-named ConfigMaps in other namespaces must not.
 func TestPlatformConfigWatch_EnqueuesMonitoring(t *testing.T) {
+	const ns = "apps-ns"
+	t.Setenv("POD_NAMESPACE", ns)
+
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      platformConfigName,
-			Namespace: "apps-ns",
+			Namespace: ns,
 		},
 		Data: map[string]string{platformVersionKey: "2.20.0"},
 	}
@@ -509,6 +513,15 @@ func TestPlatformConfigWatch_EnqueuesMonitoring(t *testing.T) {
 	other.Name = "unrelated"
 	if pred.Update(event.UpdateEvent{ObjectOld: other, ObjectNew: other}) {
 		t.Fatal("update of an unrelated ConfigMap should not pass the platform predicate")
+	}
+
+	otherNS := cm.DeepCopy()
+	otherNS.Namespace = "other-ns"
+	if pred.Create(event.CreateEvent{Object: otherNS}) {
+		t.Fatal("create of odh-monitoring-config in another namespace should not pass the platform predicate")
+	}
+	if pred.Update(event.UpdateEvent{ObjectOld: otherNS, ObjectNew: otherNS}) {
+		t.Fatal("update of odh-monitoring-config in another namespace should not pass the platform predicate")
 	}
 
 	reqs := singletonRequests(context.Background(), cm)

@@ -434,11 +434,17 @@ func singletonRequests(_ context.Context, _ client.Object) []reconcile.Request {
 	}
 }
 
-// isPlatformConfigMap matches the platform-written handshake ConfigMap by name.
-// That ConfigMap is labeled part-of=platform (or unlabeled), so it is not
-// covered by the managed-resource predicate.
+// isPlatformConfigMap matches the platform-written handshake ConfigMap by name
+// and operator namespace. That ConfigMap is labeled part-of=platform (or
+// unlabeled), so it is not covered by the managed-resource predicate. The
+// namespace check keeps same-named ConfigMaps in other namespaces from
+// enqueueing Monitoring.
 func isPlatformConfigMap(obj client.Object) bool {
-	return obj.GetName() == platformConfigName
+	ns := os.Getenv("POD_NAMESPACE")
+	if ns == "" {
+		return false
+	}
+	return obj.GetName() == platformConfigName && obj.GetNamespace() == ns
 }
 
 // SetupWithManager registers the controller with the manager.
