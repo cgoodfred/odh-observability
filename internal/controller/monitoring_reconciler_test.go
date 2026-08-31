@@ -26,6 +26,7 @@ import (
 	routev1 "github.com/openshift/api/route/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -39,6 +40,8 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	v1alpha1 "github.com/opendatahub-io/odh-observability/api/v1alpha1"
 )
@@ -288,6 +291,87 @@ func TestReconcile_ReleasesPopulated(t *testing.T) {
 	}
 	if releases[0].RepoURL == "" {
 		t.Error("releases[0].RepoURL: want non-empty")
+	}
+	if got := m.GetReleaseStatus().GetPlatformRelease(); got != "" {
+		t.Errorf("platform release: want empty in standalone (no ConfigMap), got %q", got)
+	}
+}
+
+// TestReconcile_PlatformVersionStampedIntoStatus: when the platform ConfigMap
+// is present, reconcile copies platformVersion into status.releases[name=platform].
+func TestReconcile_PlatformVersionStampedIntoStatus(t *testing.T) {
+	s := newTestScheme(t)
+
+	s.AddKnownTypeWithName(schema.GroupVersionKind{
+		Group: "operators.coreos.com", Version: "v2", Kind: "OperatorCondition",
+	}, &unstructured.Unstructured{})
+	s.AddKnownTypeWithName(schema.GroupVersionKind{
+		Group: "operators.coreos.com", Version: "v2", Kind: "OperatorConditionList",
+	}, &unstructured.UnstructuredList{})
+
+	const (
+		ns      = "apps-ns"
+		version = "2.20.0"
+	)
+	t.Setenv("POD_NAMESPACE", ns)
+
+	m := newMonitoring(v1alpha1.MonitoringInstanceName)
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      platformConfigName,
+			Namespace: ns,
+		},
+		Data: map[string]string{
+			platformVersionKey: version,
+		},
+	}
+
+	r := newTestReconciler(t, s, fake.NewClientBuilder().WithScheme(s).WithObjects(m, cm).WithStatusSubresource(m).Build())
+
+	_, err := r.reconcile(context.Background(), m)
+	if err != nil {
+		t.Fatalf("reconcile returned error: %v", err)
+	}
+
+	if got := m.GetReleaseStatus().GetPlatformRelease(); got != version {
+		t.Errorf("platform release: want %q, got %q", version, got)
+	}
+	if m.GetReleaseStatus().GetRelease(v1alpha1.MonitoringServiceName) == nil {
+		t.Fatal("missing monitoring release entry")
+	}
+}
+
+// TestPlatformConfigWatch_EnqueuesMonitoring: unlabeled odh-monitoring-config
+// updates must match the name-filtered predicate and map to the Monitoring singleton.
+func TestPlatformConfigWatch_EnqueuesMonitoring(t *testing.T) {
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      platformConfigName,
+			Namespace: "apps-ns",
+		},
+		Data: map[string]string{platformVersionKey: "2.20.0"},
+	}
+
+	pred := predicate.NewPredicateFuncs(isPlatformConfigMap)
+	if !pred.Create(event.CreateEvent{Object: cm}) {
+		t.Fatal("create of unlabeled odh-monitoring-config should pass the platform predicate")
+	}
+	if !pred.Update(event.UpdateEvent{ObjectOld: cm, ObjectNew: cm}) {
+		t.Fatal("update of unlabeled odh-monitoring-config should pass the platform predicate")
+	}
+
+	other := cm.DeepCopy()
+	other.Name = "unrelated"
+	if pred.Update(event.UpdateEvent{ObjectOld: other, ObjectNew: other}) {
+		t.Fatal("update of an unrelated ConfigMap should not pass the platform predicate")
+	}
+
+	reqs := singletonRequests(context.Background(), cm)
+	if len(reqs) != 1 {
+		t.Fatalf("want 1 request, got %d", len(reqs))
+	}
+	if reqs[0].Name != v1alpha1.MonitoringInstanceName {
+		t.Errorf("mapped name: want %q, got %q", v1alpha1.MonitoringInstanceName, reqs[0].Name)
 	}
 }
 

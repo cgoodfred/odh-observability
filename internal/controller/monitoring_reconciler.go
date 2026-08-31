@@ -411,13 +411,22 @@ func (r *MonitoringReconciler) readPlatformVersion(ctx context.Context) string {
 	return cm.Data[platformVersionKey]
 }
 
+func singletonRequests(_ context.Context, _ client.Object) []reconcile.Request {
+	return []reconcile.Request{
+		{NamespacedName: types.NamespacedName{Name: v1alpha1.MonitoringInstanceName}},
+	}
+}
+
+// isPlatformConfigMap matches the platform-written handshake ConfigMap by name.
+// That ConfigMap is labeled part-of=platform (or unlabeled), so it is not
+// covered by the managed-resource predicate.
+func isPlatformConfigMap(obj client.Object) bool {
+	return obj.GetName() == platformConfigName
+}
+
 // SetupWithManager registers the controller with the manager.
 func (r *MonitoringReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	toSingleton := handler.EnqueueRequestsFromMapFunc(func(_ context.Context, _ client.Object) []reconcile.Request {
-		return []reconcile.Request{
-			{NamespacedName: types.NamespacedName{Name: v1alpha1.MonitoringInstanceName}},
-		}
-	})
+	toSingleton := handler.EnqueueRequestsFromMapFunc(singletonRequests)
 
 	// Enqueue when any resource stamped by this controller changes (drift detection).
 	// Monitoring is cluster-scoped so it cannot own namespace-scoped resources via
@@ -427,6 +436,7 @@ func (r *MonitoringReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	managedPredicate := predicate.NewPredicateFuncs(func(obj client.Object) bool {
 		return obj.GetLabels()[odhLabels.PlatformPartOf] == "monitoring"
 	})
+	platformConfigPredicate := predicate.NewPredicateFuncs(isPlatformConfigMap)
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.Monitoring{}).
@@ -439,6 +449,7 @@ func (r *MonitoringReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&appsv1.Deployment{}, toSingleton, builder.WithPredicates(managedPredicate)).
 		Watches(&batchv1.Job{}, toSingleton, builder.WithPredicates(managedPredicate)).
 		Watches(&corev1.ConfigMap{}, toSingleton, builder.WithPredicates(managedPredicate)).
+		Watches(&corev1.ConfigMap{}, toSingleton, builder.WithPredicates(platformConfigPredicate)).
 		Watches(&corev1.Secret{}, toSingleton, builder.WithPredicates(managedPredicate)).
 		Watches(&corev1.Service{}, toSingleton, builder.WithPredicates(managedPredicate)).
 		Watches(&corev1.ServiceAccount{}, toSingleton, builder.WithPredicates(managedPredicate)).
