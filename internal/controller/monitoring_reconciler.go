@@ -161,19 +161,26 @@ func (r *MonitoringReconciler) reconcile(ctx context.Context, monitoring *v1alph
 	log := logf.FromContext(ctx)
 	cm := conditions.NewConditionsManager(monitoring, monitoring.Generation)
 
-	platformVersion := r.readPlatformVersion(ctx)
+	platformVersion, err := r.readPlatformVersion(ctx)
+	if err != nil {
+		log.Error(err, "Failed to read platform version from ConfigMap", "name", platformConfigName)
+		return ctrl.Result{}, err
+	}
+	stampPlatform := false
 
 	defer func() {
 		monitoring.Status.ObservedGeneration = monitoring.Generation
 		monitoring.Status.Phase = cm.Phase()
-		monitoring.SetReleaseStatus(platformcommon.ComponentReleaseStatus{
-			Releases: []platformcommon.ComponentRelease{{
-				Name:    v1alpha1.MonitoringServiceName,
-				RepoURL: "https://github.com/opendatahub-io/odh-observability",
-				Version: operatorVersion(),
-			}},
+		// Upsert the module identity without replacing the whole releases
+		// slice, so a failed reconcile cannot wipe a previously stamped
+		// platform version (empty rv is treated as "not gating" by the
+		// platform DAG checker).
+		monitoring.GetReleaseStatus().SetRelease(platformcommon.ComponentRelease{
+			Name:    v1alpha1.MonitoringServiceName,
+			RepoURL: "https://github.com/opendatahub-io/odh-observability",
+			Version: operatorVersion(),
 		})
-		if platformVersion != "" {
+		if stampPlatform && platformVersion != "" {
 			monitoring.GetReleaseStatus().SetPlatformRelease(platformVersion)
 		}
 	}()
@@ -303,6 +310,12 @@ func (r *MonitoringReconciler) reconcile(ctx context.Context, monitoring *v1alph
 
 	cm.AggregateReady()
 
+	// Stamp the platform version only after reconciliation has applied
+	// desired state without returning an error. Early exits (Removed,
+	// preconditions, configuration errors) and error returns leave the
+	// previous handshake value untouched.
+	stampPlatform = true
+
 	if requeueNeeded {
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
@@ -395,20 +408,24 @@ func (r *MonitoringReconciler) patchStatus(ctx context.Context, orig, updated *v
 }
 
 // readPlatformVersion reads the platformVersion from the platform config
-// ConfigMap. Returns empty string if the ConfigMap doesn't exist (standalone
-// mode) or doesn't contain the key.
-func (r *MonitoringReconciler) readPlatformVersion(ctx context.Context) string {
+// ConfigMap. A missing ConfigMap is standalone mode and returns an empty
+// version. Any other Get error (permissions, connectivity) is returned so
+// reconcile retries instead of treating it as standalone.
+func (r *MonitoringReconciler) readPlatformVersion(ctx context.Context) (string, error) {
 	ns := os.Getenv("POD_NAMESPACE")
 	if ns == "" {
-		return ""
+		return "", nil
 	}
 
 	var cm corev1.ConfigMap
 	if err := r.Get(ctx, types.NamespacedName{Name: platformConfigName, Namespace: ns}, &cm); err != nil {
-		return ""
+		if k8serr.IsNotFound(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("reading platform config ConfigMap %s/%s: %w", ns, platformConfigName, err)
 	}
 
-	return cm.Data[platformVersionKey]
+	return cm.Data[platformVersionKey], nil
 }
 
 func singletonRequests(_ context.Context, _ client.Object) []reconcile.Request {
