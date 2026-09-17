@@ -26,8 +26,14 @@ import (
 
 // Monitoring-specific condition type constants.
 const (
-	// ConditionMonitoringAvailable is the top-level condition indicating whether
-	// all prerequisite operators are installed and monitoring is operational.
+	// ConditionMonitoringDependenciesReady indicates whether all external
+	// operators required by the configured monitoring features are installed.
+	ConditionMonitoringDependenciesReady = "MonitoringDependenciesReady"
+
+	// ConditionMonitoringAvailable is the legacy condition for external operator
+	// preconditions.
+	// It is retained as a legacy compatibility condition while platform
+	// consumers transition to ConditionMonitoringDependenciesReady.
 	ConditionMonitoringAvailable = "MonitoringAvailable"
 
 	// ConditionMonitoringStackAvailable indicates the MonitoringStack CR is deployed.
@@ -90,9 +96,11 @@ const (
 	TracesNotConfiguredMessage   = "Traces not configured in Monitoring CR"
 	AlertingNotConfiguredMessage = "Alerting not configured in Monitoring CR"
 
-	TempoOperatorMissingMessage                  = "Tempo operator must be installed for traces configuration"
-	COOMissingMessage                            = "ClusterObservability operator must be installed for metrics configuration"
-	OpenTelemetryCollectorOperatorMissingMessage = "OpenTelemetryCollector operator must be installed for OpenTelemetry configuration"
+	TempoOperatorMissingMessage                  = "Tempo Operator is required for traces; install it from OperatorHub"
+	COOMissingMessage                            = "Cluster Observability Operator is required for metrics; install it from OperatorHub"
+	OpenTelemetryCollectorOperatorMissingMessage = "Red Hat build of OpenTelemetry is required for metrics, traces, and usage logs; install it from OperatorHub"
+	LokiOperatorMissingMessage                   = "Loki Operator is required for logs and usage logs; install it from OperatorHub"
+	ClusterLoggingOperatorMissingMessage         = "Red Hat OpenShift Logging Operator is required for logs; install it from OperatorHub"
 )
 
 // featureConditionTypes lists the feature-specific condition types that
@@ -181,12 +189,12 @@ func (cm *ConditionsManager) MarkUnknown(condType string) {
 // Conditions with ConditionSeverityInfo (intentionally not configured features)
 // are excluded from Degraded aggregation — they represent user intent, not failures.
 //
-// Ready = True when MonitoringAvailable is True and no configured feature is actively failing.
-// ProvisioningSucceeded = True when MonitoringAvailable is True (manifests applied without error).
+// Ready = True when MonitoringDependenciesReady is True and no configured feature is actively failing.
+// ProvisioningSucceeded = True when MonitoringDependenciesReady is True (manifests applied without error).
 // Degraded = True when a configured feature is failing (CRD missing, operator unavailable, etc.).
 func (cm *ConditionsManager) AggregateReady() {
-	monAvail := libconditions.FindStatusCondition(cm.accessor, ConditionMonitoringAvailable)
-	if monAvail == nil || monAvail.Status != metav1.ConditionTrue {
+	dependenciesReady := libconditions.FindStatusCondition(cm.accessor, ConditionMonitoringDependenciesReady)
+	if dependenciesReady == nil || dependenciesReady.Status != metav1.ConditionTrue {
 		cm.MarkFalse(string(platformcommon.ConditionTypeProvisioningSucceeded),
 			"PreconditionsFailed", "Required operators are not installed")
 		cm.MarkFalse(string(platformcommon.ConditionTypeReady),

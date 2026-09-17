@@ -49,6 +49,8 @@ const (
 	opentelemetryOperator        = "opentelemetry-operator"
 	clusterObservabilityOperator = "cluster-observability-operator"
 	tempoOperator                = "tempo-operator"
+	lokiOperator                 = "loki-operator"
+	clusterLoggingOperator       = "cluster-logging"
 
 	defaultStorageSize = "5Gi"
 	defaultRetention   = "90d"
@@ -230,7 +232,10 @@ func buildTemplateData(ctx context.Context, c client.Client, monitoring *v1alpha
 func checkMonitoringPreconditions(ctx context.Context, c client.Client, monitoring *v1alpha1.Monitoring) error {
 	var allErrors *multierror.Error
 
-	if monitoring.Spec.Metrics != nil || monitoring.Spec.Traces != nil {
+	usageLogsConfigured := monitoring.Spec.UsageLogs != nil && monitoring.Spec.UsageLogs.Storage != nil
+	needsLoki := monitoring.Spec.Logs != nil || usageLogsConfigured
+
+	if monitoring.Spec.Metrics != nil || monitoring.Spec.Traces != nil || usageLogsConfigured {
 		if info, err := operatorExists(ctx, c, opentelemetryOperator); err != nil {
 			return err
 		} else if info == nil {
@@ -251,6 +256,22 @@ func checkMonitoringPreconditions(ctx context.Context, c client.Client, monitori
 			return err
 		} else if info == nil {
 			allErrors = multierror.Append(allErrors, errors.New(conditions.TempoOperatorMissingMessage))
+		}
+	}
+
+	if needsLoki {
+		if info, err := operatorExists(ctx, c, lokiOperator); err != nil {
+			return err
+		} else if info == nil {
+			allErrors = multierror.Append(allErrors, errors.New(conditions.LokiOperatorMissingMessage))
+		}
+	}
+
+	if monitoring.Spec.Logs != nil {
+		if info, err := operatorExists(ctx, c, clusterLoggingOperator); err != nil {
+			return err
+		} else if info == nil {
+			allErrors = multierror.Append(allErrors, errors.New(conditions.ClusterLoggingOperatorMissingMessage))
 		}
 	}
 

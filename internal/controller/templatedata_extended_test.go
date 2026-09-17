@@ -80,10 +80,10 @@ func TestCheckPreconditions_MetricsRequiresOTelAndCOO(t *testing.T) {
 	}
 
 	errStr := err.Error()
-	if !strings.Contains(errStr, "OpenTelemetryCollector") {
+	if !strings.Contains(errStr, "Red Hat build of OpenTelemetry") {
 		t.Errorf("expected OpenTelemetry error, got: %s", errStr)
 	}
-	if !strings.Contains(errStr, "ClusterObservability") {
+	if !strings.Contains(errStr, "Cluster Observability Operator") {
 		t.Errorf("expected COO error, got: %s", errStr)
 	}
 }
@@ -104,7 +104,7 @@ func TestCheckPreconditions_TracesRequiresOTelAndTempo(t *testing.T) {
 	}
 
 	errStr := err.Error()
-	if !strings.Contains(errStr, "OpenTelemetryCollector") {
+	if !strings.Contains(errStr, "Red Hat build of OpenTelemetry") {
 		t.Errorf("expected OpenTelemetry error, got: %s", errStr)
 	}
 	if !strings.Contains(errStr, "Tempo") {
@@ -130,6 +130,72 @@ func TestCheckPreconditions_AllOperatorsPresent(t *testing.T) {
 	err := checkMonitoringPreconditions(context.Background(), cli, m)
 	if err != nil {
 		t.Fatalf("expected no error when all operators present, got: %v", err)
+	}
+}
+
+func TestCheckPreconditions_UsageLogsRequiresOTelAndLoki(t *testing.T) {
+	s := newTestScheme(t)
+	registerOperatorCondition(s)
+
+	m := newMonitoring(v1alpha1.MonitoringInstanceName)
+	m.Spec.UsageLogs = &v1alpha1.UsageLogs{Storage: &v1alpha1.LokiStorageConfig{}}
+
+	cli := fake.NewClientBuilder().WithScheme(s).Build()
+	err := checkMonitoringPreconditions(context.Background(), cli, m)
+	if err == nil {
+		t.Fatal("expected error when operators are missing")
+	}
+
+	errStr := err.Error()
+	for _, expected := range []string{"Red Hat build of OpenTelemetry", "Loki Operator", "OperatorHub"} {
+		if !strings.Contains(errStr, expected) {
+			t.Errorf("expected %q in error, got: %s", expected, errStr)
+		}
+	}
+	if strings.Contains(errStr, "OpenShift Logging") {
+		t.Errorf("usage logs should not require OpenShift Logging, got: %s", errStr)
+	}
+}
+
+func TestCheckPreconditions_LogsRequiresLokiAndOpenShiftLogging(t *testing.T) {
+	s := newTestScheme(t)
+	registerOperatorCondition(s)
+
+	m := newMonitoring(v1alpha1.MonitoringInstanceName)
+	m.Spec.Logs = &v1alpha1.Logs{Storage: &v1alpha1.LokiStorageConfig{}}
+
+	cli := fake.NewClientBuilder().WithScheme(s).Build()
+	err := checkMonitoringPreconditions(context.Background(), cli, m)
+	if err == nil {
+		t.Fatal("expected error when operators are missing")
+	}
+
+	errStr := err.Error()
+	for _, expected := range []string{"Loki Operator", "Red Hat OpenShift Logging Operator", "OperatorHub"} {
+		if !strings.Contains(errStr, expected) {
+			t.Errorf("expected %q in error, got: %s", expected, errStr)
+		}
+	}
+	if strings.Contains(errStr, "OpenTelemetry") {
+		t.Errorf("cluster log forwarding should not require OpenTelemetry, got: %s", errStr)
+	}
+}
+
+func TestCheckPreconditions_AllLoggingOperatorsPresent(t *testing.T) {
+	s := newTestScheme(t)
+	registerOperatorCondition(s)
+
+	m := newMonitoring(v1alpha1.MonitoringInstanceName)
+	m.Spec.UsageLogs = &v1alpha1.UsageLogs{Storage: &v1alpha1.LokiStorageConfig{}}
+	m.Spec.Logs = &v1alpha1.Logs{Storage: &v1alpha1.LokiStorageConfig{}}
+
+	otel := newOperatorCondition("opentelemetry-operator.v0.158.0-1")
+	loki := newOperatorCondition("loki-operator.v6.6.1")
+	logging := newOperatorCondition("cluster-logging.v6.6.1")
+
+	cli := fake.NewClientBuilder().WithScheme(s).WithObjects(otel, loki, logging).Build()
+	if err := checkMonitoringPreconditions(context.Background(), cli, m); err != nil {
+		t.Fatalf("expected no error when all logging operators are present, got: %v", err)
 	}
 }
 

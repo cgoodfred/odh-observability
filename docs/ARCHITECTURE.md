@@ -23,8 +23,8 @@ flowchart TD
     F -- Managed --> H[Check preconditions]
     H --> I{Prerequisite
     operators present?}
-    I -- No --> J[Mark MonitoringAvailable=False + aggregate Ready]
-    I -- Yes --> K[Mark MonitoringAvailable=True]
+    I -- No --> J[Mark MonitoringDependenciesReady=False + aggregate Ready]
+    I -- Yes --> K[Mark MonitoringDependenciesReady=True]
     K --> L[Resolve Perses API version]
     L --> M[Build template data]
     M --> N[Run action functions]
@@ -44,9 +44,11 @@ Before any feature deployment, the reconciler verifies that prerequisite operato
 |----------|--------------|
 | `cluster-observability-operator` | Metrics configured |
 | `tempo-operator` | Traces configured |
-| `opentelemetry-operator` | Metrics or traces configured |
+| `opentelemetry-operator` | Metrics, traces, or usage logs configured |
+| `loki-operator` | Usage logs or cluster log forwarding configured |
+| `cluster-logging` | Cluster log forwarding configured |
 
-If any required operator is missing, `MonitoringAvailable` is set to False and reconciliation stops without error (no retry -- the CRD watch will trigger re-reconciliation when operators are installed).
+If any required operator is missing, `MonitoringDependenciesReady` is set to False with the missing operator names and OperatorHub installation guidance. Reconciliation then stops without error (no retry -- the CRD watch will trigger re-reconciliation when operators are installed). The legacy `MonitoringAvailable` condition is updated in parallel for compatibility.
 
 ## Action Functions
 
@@ -153,7 +155,8 @@ Each action function manages one or more conditions:
 
 | Condition | Set By |
 |-----------|--------|
-| `MonitoringAvailable` | Precondition check |
+| `MonitoringDependenciesReady` | External operator precondition check |
+| `MonitoringAvailable` | Legacy alias of `MonitoringDependenciesReady` |
 | `MonitoringStackAvailable` | `deployMonitoringStackWithQuerierAndRestrictions` |
 | `ThanosQuerierAvailable` | `deployMonitoringStackWithQuerierAndRestrictions` |
 | `TempoAvailable` | `deployTracingStack` |
@@ -178,7 +181,7 @@ The `ConditionsManager` supports three marking methods:
 
 ```mermaid
 flowchart TD
-    A[MonitoringAvailable?] --> |No| B[Ready=False
+    A[MonitoringDependenciesReady?] --> |No| B[Ready=False
     ProvisioningSucceeded=False
     Degraded=False
     reason: PreconditionsFailed]

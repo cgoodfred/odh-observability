@@ -191,6 +191,8 @@ func (r *MonitoringReconciler) reconcile(ctx context.Context, monitoring *v1alph
 		if err := r.deleteAllOwned(ctx, monitoring); err != nil {
 			log.Error(err, "Failed to delete owned resources, will retry on next reconcile")
 		}
+		cm.MarkNotConfigured(conditions.ConditionMonitoringDependenciesReady, "Removed", "Monitoring is in Removed state")
+		cm.MarkNotConfigured(conditions.ConditionMonitoringAvailable, "Removed", "Monitoring is in Removed state")
 		cm.MarkFalse(string(platformcommon.ConditionTypeReady), "Removed", "Monitoring is in Removed state")
 		cm.MarkFalse(string(platformcommon.ConditionTypeProvisioningSucceeded), "Removed", "Monitoring is in Removed state")
 		cm.MarkFalse(string(platformcommon.ConditionTypeDegraded), "NotDegraded", "")
@@ -199,13 +201,18 @@ func (r *MonitoringReconciler) reconcile(ctx context.Context, monitoring *v1alph
 
 	// Check prerequisite operators.
 	if err := checkMonitoringPreconditions(ctx, r.Client, monitoring); err != nil {
+		message := fmt.Sprintf("Required monitoring dependencies are missing: %s", err.Error())
+		cm.MarkFalse(conditions.ConditionMonitoringDependenciesReady,
+			conditions.MissingOperatorReason,
+			message)
 		cm.MarkFalse(conditions.ConditionMonitoringAvailable,
 			conditions.MissingOperatorReason,
-			fmt.Sprintf("Monitoring preconditions failed: %s", err.Error()))
+			message)
 		cm.AggregateReady()
 		log.Error(err, "Monitoring preconditions failed")
 		return ctrl.Result{}, nil
 	}
+	cm.MarkTrue(conditions.ConditionMonitoringDependenciesReady)
 	cm.MarkTrue(conditions.ConditionMonitoringAvailable)
 
 	// Pre-resolve Perses API version once to avoid redundant API calls across

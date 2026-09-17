@@ -86,7 +86,7 @@ func markAllTrue(cm *ConditionsManager) {
 // Ready=True and Degraded=False. The operator is running; there's nothing to provision.
 func TestAggregateReady_NothingConfigured(t *testing.T) {
 	cm, acc := newTestCM()
-	cm.MarkTrue(ConditionMonitoringAvailable)
+	cm.MarkTrue(ConditionMonitoringDependenciesReady)
 	markAllNotConfigured(cm)
 
 	cm.AggregateReady()
@@ -105,7 +105,7 @@ func TestAggregateReady_NothingConfigured(t *testing.T) {
 // TestAggregateReady_AllFeaturesWorking: all features configured and healthy.
 func TestAggregateReady_AllFeaturesWorking(t *testing.T) {
 	cm, acc := newTestCM()
-	cm.MarkTrue(ConditionMonitoringAvailable)
+	cm.MarkTrue(ConditionMonitoringDependenciesReady)
 	markAllTrue(cm)
 
 	cm.AggregateReady()
@@ -125,7 +125,7 @@ func TestAggregateReady_AllFeaturesWorking(t *testing.T) {
 // MonitoringStack CRD is missing. Should be Ready=True, Degraded=True.
 func TestAggregateReady_ConfiguredFeatureFailing(t *testing.T) {
 	cm, acc := newTestCM()
-	cm.MarkTrue(ConditionMonitoringAvailable)
+	cm.MarkTrue(ConditionMonitoringDependenciesReady)
 
 	// Metrics configured but CRD absent (real failure, not "not configured").
 	cm.MarkFalse(ConditionMonitoringStackAvailable, "MonitoringStackCRDNotFoundReason", "MonitoringStack CRD not found")
@@ -158,7 +158,7 @@ func TestAggregateReady_ConfiguredFeatureFailing(t *testing.T) {
 // Should be Ready=False, Degraded=False, ProvisioningSucceeded=False.
 func TestAggregateReady_PreconditionsFailed(t *testing.T) {
 	cm, acc := newTestCM()
-	cm.MarkFalse(ConditionMonitoringAvailable, MissingOperatorReason, "OpenTelemetry operator not found")
+	cm.MarkFalse(ConditionMonitoringDependenciesReady, MissingOperatorReason, "OpenTelemetry operator not found")
 	markAllNotConfigured(cm)
 
 	cm.AggregateReady()
@@ -178,7 +178,7 @@ func TestAggregateReady_PreconditionsFailed(t *testing.T) {
 // one configured feature failing. Degraded=True, Ready=True.
 func TestAggregateReady_MixedNotConfiguredAndFailing(t *testing.T) {
 	cm, acc := newTestCM()
-	cm.MarkTrue(ConditionMonitoringAvailable)
+	cm.MarkTrue(ConditionMonitoringDependenciesReady)
 
 	// Traces configured, but Tempo CRD is missing (real failure).
 	cm.MarkFalse(ConditionTempoAvailable, "TempoMonolithicCRDNotFoundReason", "TempoMonolithic CRD not found")
@@ -208,7 +208,7 @@ func TestAggregateReady_MixedNotConfiguredAndFailing(t *testing.T) {
 // in Unknown state should produce Ready=Unknown, Degraded=False.
 func TestAggregateReady_ConfiguredFeatureInitializing(t *testing.T) {
 	cm, acc := newTestCM()
-	cm.MarkTrue(ConditionMonitoringAvailable)
+	cm.MarkTrue(ConditionMonitoringDependenciesReady)
 
 	// Simulate a configured feature that hasn't finished initializing.
 	cm.MarkUnknown(ConditionMonitoringStackAvailable)
@@ -237,7 +237,7 @@ func TestAggregateReady_ConfiguredFeatureInitializing(t *testing.T) {
 // TestPhase_Ready: Phase() returns PhaseReady when Ready=True.
 func TestPhase_Ready(t *testing.T) {
 	cm, _ := newTestCM()
-	cm.MarkTrue(ConditionMonitoringAvailable)
+	cm.MarkTrue(ConditionMonitoringDependenciesReady)
 	markAllNotConfigured(cm)
 	cm.AggregateReady()
 
@@ -249,7 +249,7 @@ func TestPhase_Ready(t *testing.T) {
 // TestPhase_NotReady: Phase() returns PhaseNotReady when Ready=False.
 func TestPhase_NotReady(t *testing.T) {
 	cm, _ := newTestCM()
-	cm.MarkFalse(ConditionMonitoringAvailable, MissingOperatorReason, "missing")
+	cm.MarkFalse(ConditionMonitoringDependenciesReady, MissingOperatorReason, "missing")
 	markAllNotConfigured(cm)
 	cm.AggregateReady()
 
