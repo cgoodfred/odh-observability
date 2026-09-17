@@ -201,6 +201,10 @@ func (r *MonitoringReconciler) reconcile(ctx context.Context, monitoring *v1alph
 
 	// Check prerequisite operators.
 	if err := checkMonitoringPreconditions(ctx, r.Client, monitoring); err != nil {
+		var missingOperators *missingOperatorsError
+		if !errors.As(err, &missingOperators) {
+			return ctrl.Result{}, err
+		}
 		message := fmt.Sprintf("Required monitoring dependencies are missing: %s", err.Error())
 		cm.MarkFalse(conditions.ConditionMonitoringDependenciesReady,
 			conditions.MissingOperatorReason,

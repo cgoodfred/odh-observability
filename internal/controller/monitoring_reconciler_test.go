@@ -124,6 +124,17 @@ func platformConfigMapGetForbidden() interceptor.Funcs {
 	}
 }
 
+func operatorConditionListForbidden() interceptor.Funcs {
+	return interceptor.Funcs{
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if list.GetObjectKind().GroupVersionKind().Kind == "OperatorConditionList" {
+				return k8serr.NewForbidden(schema.GroupResource{Resource: "operatorconditions"}, "", errors.New("not allowed"))
+			}
+			return c.List(ctx, list, opts...)
+		},
+	}
+}
+
 func TestReadPlatformVersion(t *testing.T) {
 	const ns = "apps-ns"
 
@@ -256,6 +267,31 @@ func TestReconcile_PreconditionsFailed(t *testing.T) {
 	for _, expected := range []string{"Red Hat build of OpenTelemetry", "Cluster Observability Operator", "OperatorHub"} {
 		if !strings.Contains(dependenciesReady.Message, expected) {
 			t.Errorf("MonitoringDependenciesReady message %q does not contain %q", dependenciesReady.Message, expected)
+		}
+	}
+}
+
+func TestReconcile_PreconditionLookupFailureReturnsError(t *testing.T) {
+	s := newTestScheme(t)
+	registerOperatorConditionTypes(s)
+
+	m := newMonitoring(v1alpha1.MonitoringInstanceName)
+	m.Spec.Metrics = &v1alpha1.Metrics{}
+
+	cli := fake.NewClientBuilder().WithScheme(s).WithObjects(m).WithStatusSubresource(m).
+		WithInterceptorFuncs(operatorConditionListForbidden()).Build()
+	r := newTestReconciler(t, s, cli)
+
+	_, err := r.reconcile(context.Background(), m)
+	if err == nil {
+		t.Fatal("expected lookup error to be returned for controller-runtime retry")
+	}
+	if !k8serr.IsForbidden(err) {
+		t.Fatalf("expected forbidden lookup error, got: %v", err)
+	}
+	for _, condition := range m.Status.Conditions {
+		if condition.Reason == "MissingOperator" {
+			t.Errorf("lookup failure was incorrectly reported as a missing operator: %#v", condition)
 		}
 	}
 }

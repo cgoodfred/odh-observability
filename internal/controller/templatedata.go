@@ -85,6 +85,20 @@ const (
 	maxTotalExporterSize = 51200 // Maximum total size for all exporters combined (50KB).
 )
 
+// missingOperatorsError distinguishes confirmed missing dependencies from
+// operational errors encountered while checking for them.
+type missingOperatorsError struct {
+	err error
+}
+
+func (e *missingOperatorsError) Error() string {
+	return e.err.Error()
+}
+
+func (e *missingOperatorsError) Unwrap() error {
+	return e.err
+}
+
 // dns1123LabelRe matches valid DNS-1123 labels (Kubernetes namespace names).
 var dns1123LabelRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?$`)
 
@@ -228,7 +242,8 @@ func buildTemplateData(ctx context.Context, c client.Client, monitoring *v1alpha
 }
 
 // checkMonitoringPreconditions verifies that prerequisite operators are installed.
-// Returns a multierror listing all missing operators.
+// Returns a missingOperatorsError listing all confirmed missing operators, or
+// the operational error encountered while checking for them.
 func checkMonitoringPreconditions(ctx context.Context, c client.Client, monitoring *v1alpha1.Monitoring) error {
 	var allErrors *multierror.Error
 
@@ -275,7 +290,10 @@ func checkMonitoringPreconditions(ctx context.Context, c client.Client, monitori
 		}
 	}
 
-	return allErrors.ErrorOrNil()
+	if err := allErrors.ErrorOrNil(); err != nil {
+		return &missingOperatorsError{err: err}
+	}
+	return nil
 }
 
 // operatorExists checks for an OLM OperatorCondition with the given name prefix.
