@@ -730,9 +730,6 @@ func (tc *TestContext) ensureSubscriptionExists(namespace, name, channel string)
 			if err := unstructured.SetNestedField(u.Object, channel, "spec", "channel"); err != nil {
 				return err
 			}
-			if err := unstructured.SetNestedField(u.Object, name, "spec", "package"); err != nil {
-				return err
-			}
 			if err := unstructured.SetNestedField(u.Object, "redhat-operators", "spec", "source"); err != nil {
 				return err
 			}

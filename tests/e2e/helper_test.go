@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/opendatahub-io/odh-observability/internal/controller/gvk"
 	jq "github.com/opendatahub-io/odh-observability/tests/e2e/matchers/jq"
@@ -843,20 +844,29 @@ func (tc *MonitoringTestCtx) installDependentOperators(t *testing.T) {
 		t.Fatalf("failed to check LokiStack CRD: %v", err)
 	}
 
-	manifest := &unstructured.Unstructured{}
-	manifest.SetGroupVersionKind(schema.GroupVersionKind{
-		Group: "packages.operators.coreos.com", Version: "v1", Kind: "PackageManifest",
+	manifests := &unstructured.UnstructuredList{}
+	manifests.SetGroupVersionKind(schema.GroupVersionKind{
+		Group: "packages.operators.coreos.com", Version: "v1", Kind: "PackageManifestList",
 	})
-	if err := tc.Client().Get(tc.Context(), types.NamespacedName{
-		Name: lokiOpName, Namespace: "openshift-marketplace",
-	}, manifest); err != nil {
-		t.Fatalf("Loki Operator is required; failed to discover %s PackageManifest: %v", lokiOpName, err)
+	if err := tc.Client().List(tc.Context(), manifests,
+		client.InNamespace("openshift-marketplace"),
+		client.MatchingLabels{"catalog": "redhat-operators"},
+	); err != nil {
+		t.Fatalf("Loki Operator is required; failed to list redhat-operators PackageManifests: %v", err)
 	}
-	channel, _, err := unstructured.NestedString(manifest.Object, "status", "defaultChannel")
-	if err != nil || channel == "" {
-		t.Fatalf("Loki Operator PackageManifest has no default channel: %v", err)
+	for _, manifest := range manifests.Items {
+		if manifest.GetName() != lokiOpName {
+			continue
+		}
+		channel, _, err := unstructured.NestedString(manifest.Object, "status", "defaultChannel")
+		if err != nil || channel == "" {
+			t.Fatalf("redhat-operators Loki PackageManifest has no default channel: %v", err)
+		}
+		t.Logf("installing Loki Operator from redhat-operators channel %s", channel)
+		tc.EnsureOperatorInstalled(lokiOpNamespace, lokiOpName, channel)
+		return
 	}
-	tc.EnsureOperatorInstalled(lokiOpNamespace, lokiOpName, channel)
+	t.Fatalf("Loki Operator is required; %s PackageManifest is missing from redhat-operators", lokiOpName)
 }
 
 // Suppress unused warnings for transform functions used in later commits.
