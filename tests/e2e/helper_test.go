@@ -8,8 +8,11 @@ import (
 	common "github.com/opendatahub-io/odh-platform-utilities/api/common"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	k8serr "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/opendatahub-io/odh-observability/internal/controller/gvk"
@@ -52,6 +55,9 @@ const (
 	opentelemetryOpName      = "opentelemetry-product"
 	opentelemetryOpNamespace = "openshift-opentelemetry-operator"
 	opentelemetryOpChannel   = "stable"
+
+	lokiOpName      = "loki-operator"
+	lokiOpNamespace = "openshift-operators-redhat"
 )
 
 // Constants for common test values.
@@ -390,7 +396,7 @@ func (tc *MonitoringTestCtx) setupUsageLogsWithStorage(t *testing.T, storageType
 
 // cleanupTracesConfiguration resets traces configuration.
 func (tc *MonitoringTestCtx) cleanupTracesConfiguration() {
-	tc.updateMonitoringConfig(withNoTraces())
+	tc.updateMonitoringConfig(withManagementState(common.Managed), withNoTraces())
 }
 
 // detectExpectedReplicas queries the cluster node count to determine expected Prometheus replicas.
@@ -425,11 +431,8 @@ func detectExpectedReplicas(t *testing.T, tc *TestContext) int {
 	return 2
 }
 
-// createDummySecret creates a test secret for the specified backend type.
-// For Tempo backends, this routes to tempo-specific helpers.
-//
-// Deprecated: Use createTempoS3Secret, createTempoGCSSecret, or createLokiS3Secret directly.
-func (tc *MonitoringTestCtx) createDummySecret(t *testing.T, backendType, secretName, namespace string) {
+// createTempoStorageSecret creates a test secret for a locally hosted Tempo backend.
+func (tc *MonitoringTestCtx) createTempoStorageSecret(t *testing.T, backendType, secretName, namespace string) {
 	t.Helper()
 
 	switch backendType {
@@ -453,10 +456,10 @@ func (tc *MonitoringTestCtx) createTempoS3Secret(t *testing.T, secretName, names
 		},
 		Type: corev1.SecretTypeOpaque,
 		Data: map[string][]byte{
-			"access_key_id":     []byte("fake-access-key"),
-			"access_key_secret": []byte("fake-secret-key"),
-			"bucket":            []byte("fake-bucket"),
-			"endpoint":          []byte("https://s3.amazonaws.com"),
+			"access_key_id":     []byte(seaweedFSAccessKey),
+			"access_key_secret": []byte(seaweedFSSecretKey),
+			"bucket":            []byte(tempoS3Bucket),
+			"endpoint":          fmt.Appendf(nil, "http://%s.%s.svc.cluster.local:%d", seaweedFSServiceName, namespace, seaweedFSS3Port),
 		},
 	}
 
@@ -486,6 +489,7 @@ func (tc *MonitoringTestCtx) createTempoGCSSecret(t *testing.T, secretName, name
 		},
 		Type: corev1.SecretTypeOpaque,
 		Data: map[string][]byte{
+			"bucketname": []byte(fakeGCSBucket),
 			"key.json": []byte(`{
 				"type": "service_account",
 				"project_id": "fake-test-project-not-real",
@@ -522,13 +526,13 @@ func (tc *MonitoringTestCtx) createLokiS3Secret(t *testing.T, secretName, namesp
 		},
 		Type: corev1.SecretTypeOpaque,
 		Data: map[string][]byte{
-			"access_key_id":     []byte("fake-access-key"),
-			"access_key_secret": []byte("fake-secret-key"),
-			"bucketnames":       []byte("fake-bucket"),
-			"endpoint":          []byte("https://s3.us-east-1.amazonaws.com"),
+			"access_key_id":     []byte(seaweedFSAccessKey),
+			"access_key_secret": []byte(seaweedFSSecretKey),
+			"bucketnames":       []byte(lokiS3Bucket),
+			"endpoint":          fmt.Appendf(nil, "http://%s.%s.svc.cluster.local:%d", seaweedFSServiceName, namespace, seaweedFSS3Port),
 			"region":            []byte("us-east-1"),
-			"insecure":          []byte("false"),
-			"s3ForcePathStyle":  []byte("false"),
+			"insecure":          []byte("true"),
+			"s3ForcePathStyle":  []byte("true"),
 		},
 	}
 
@@ -683,6 +687,20 @@ func (tc *MonitoringTestCtx) ensurePrerequisites(t *testing.T) {
 	if testOpts.installOperators {
 		tc.installDependentOperators(t)
 	}
+	for _, required := range []schema.GroupVersionKind{
+		gvk.MonitoringStack,
+		gvk.TempoMonolithic,
+		gvk.TempoStack,
+		gvk.OpenTelemetryCollector,
+		gvk.Instrumentation,
+		gvk.LokiStack,
+		gvk.Perses,
+		gvk.ThanosQuerier,
+		gvk.CoreosPodMonitor,
+		gvk.CoreosServiceMonitor,
+	} {
+		tc.ensureCRDExists(t, required)
+	}
 
 	tc.ensureMonitoringCRExists(t)
 
@@ -694,8 +712,8 @@ func (tc *MonitoringTestCtx) ensurePrerequisites(t *testing.T) {
 	tc.ensureNamespaceExists(tc.MonitoringNamespace)
 }
 
-// installDependentOperators installs the three required OLM operators
-// in parallel sub-tests. Each operator gets its own namespace + OperatorGroup + Subscription.
+// installDependentOperators installs required OLM operators. Each operator gets
+// its own namespace, OperatorGroup, and Subscription when it is not already present.
 func (tc *MonitoringTestCtx) installDependentOperators(t *testing.T) {
 	t.Helper()
 
@@ -719,6 +737,32 @@ func (tc *MonitoringTestCtx) installDependentOperators(t *testing.T) {
 			})
 		}
 	})
+
+	// Loki channels are versioned, so use the cluster catalog's default channel.
+	// A preinstalled Loki Operator may not have a PackageManifest in the catalog.
+	lokiStacks := &unstructured.UnstructuredList{}
+	lokiStacks.SetGroupVersionKind(gvk.LokiStack)
+	if err := tc.Client().List(tc.Context(), lokiStacks); err == nil {
+		t.Log("LokiStack CRD is already available")
+		return
+	} else if !meta.IsNoMatchError(err) && !k8serr.IsNotFound(err) {
+		t.Fatalf("failed to check LokiStack CRD: %v", err)
+	}
+
+	manifest := &unstructured.Unstructured{}
+	manifest.SetGroupVersionKind(schema.GroupVersionKind{
+		Group: "packages.operators.coreos.com", Version: "v1", Kind: "PackageManifest",
+	})
+	if err := tc.Client().Get(tc.Context(), types.NamespacedName{
+		Name: lokiOpName, Namespace: "openshift-marketplace",
+	}, manifest); err != nil {
+		t.Fatalf("Loki Operator is required; failed to discover %s PackageManifest: %v", lokiOpName, err)
+	}
+	channel, _, err := unstructured.NestedString(manifest.Object, "status", "defaultChannel")
+	if err != nil || channel == "" {
+		t.Fatalf("Loki Operator PackageManifest has no default channel: %v", err)
+	}
+	tc.EnsureOperatorInstalled(lokiOpNamespace, lokiOpName, channel)
 }
 
 // Suppress unused warnings for transform functions used in later commits.

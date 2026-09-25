@@ -1307,12 +1307,19 @@ func (tc *MonitoringTestCtx) validateTempoStackCreationAndPersesTLS(t *testing.T
 	tc = tc.WithT(t)
 
 	secretName := fmt.Sprintf("%s-secret", backend)
+	t.Cleanup(func() {
+		tc.cleanupTracesConfiguration()
+		tc.cleanupTempoStackAndSecret(secretName)
+		switch backend {
+		case TracesStorageBackendS3:
+			tc.cleanupSeaweedFS()
+		case TracesStorageBackendGCS:
+			tc.cleanupFakeGCS()
+		}
+	})
 
 	tc.validateTempoStackCreation(t, backend, secretName, monitoringCondition, monitoringErrorMsg)
 	tc.validatePersesDatasourceTLS(t, backend, secretName)
-
-	tc.cleanupTracesConfiguration()
-	tc.cleanupTempoStackAndSecret(secretName)
 }
 
 // validateTempoStackCreation creates a secret, enables traces for the given backend,
@@ -1323,7 +1330,15 @@ func (tc *MonitoringTestCtx) validateTempoStackCreation(t *testing.T, backend, s
 
 	tc.ensureMonitoringCleanSlate(t, secretName)
 
-	tc.createDummySecret(t, backend, secretName, tc.MonitoringNamespace)
+	switch backend {
+	case TracesStorageBackendS3:
+		tc.startSeaweedFS(t, tempoS3Bucket)
+	case TracesStorageBackendGCS:
+		tc.startFakeGCS(t)
+	default:
+		t.Fatalf("unsupported Tempo storage backend %q", backend)
+	}
+	tc.createTempoStorageSecret(t, backend, secretName, tc.MonitoringNamespace)
 
 	tc.updateMonitoringConfig(
 		withManagementState(common.Managed),
@@ -1336,11 +1351,28 @@ func (tc *MonitoringTestCtx) validateTempoStackCreation(t *testing.T, backend, s
 		WithCustomErrorMsg(monitoringErrorMsg),
 	)
 
+	tempoStack := types.NamespacedName{Name: TempoStackName, Namespace: tc.MonitoringNamespace}
 	tc.EnsureResourceExists(
-		WithMinimalObject(gvk.TempoStack, types.NamespacedName{
-			Name:      TempoStackName,
-			Namespace: tc.MonitoringNamespace,
-		}),
+		WithMinimalObject(gvk.TempoStack, tempoStack),
+		WithCondition(And(
+			jq.Match(`.spec.storage.secret.type == "%s"`, backend),
+			jq.Match(`.spec.storage.secret.name == "%s"`, secretName),
+		)),
+		WithEventuallyTimeout(15*time.Minute),
+	)
+
+	if backend == TracesStorageBackendGCS {
+		tc.EventuallyResourcePatched(
+			WithMinimalObject(gvk.TempoStack, tempoStack),
+			WithMutateFunc(jq.Transform(`.spec.extraConfig.tempo.storage.trace.gcs = {
+				"endpoint": "http://%s.%s.svc.cluster.local:%d/storage/v1/",
+				"insecure": true
+			}`, fakeGCSServiceName, tc.MonitoringNamespace, fakeGCSPort)),
+		)
+	}
+
+	tc.EnsureResourceExists(
+		WithMinimalObject(gvk.TempoStack, tempoStack),
 		WithCondition(And(
 			jq.Match(`.spec.storage.secret.type == "%s"`, backend),
 			jq.Match(`.spec.storage.secret.name == "%s"`, secretName),
@@ -1350,6 +1382,13 @@ func (tc *MonitoringTestCtx) validateTempoStackCreation(t *testing.T, backend, s
 		WithEventuallyTimeout(15*time.Minute),
 		WithCustomErrorMsg("TempoStack should be created by controller with %s backend", backend),
 	)
+	if backend == TracesStorageBackendGCS {
+		tc.EnsureResourceExists(
+			WithMinimalObject(gvk.TempoStack, tempoStack),
+			WithCondition(jq.Match(`.spec.extraConfig.tempo.storage.trace.gcs.endpoint == "http://%s.%s.svc.cluster.local:%d/storage/v1/"`, fakeGCSServiceName, tc.MonitoringNamespace, fakeGCSPort)),
+			WithCustomErrorMsg("TempoStack should keep the fake GCS endpoint after reconciliation"),
+		)
+	}
 }
 
 // validatePersesDatasourceTLS enables TLS on the existing traces configuration and validates

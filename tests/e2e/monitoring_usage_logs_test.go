@@ -21,26 +21,36 @@ import (
 func (tc *MonitoringTestCtx) runUsageLogsCollectionTests(t *testing.T) {
 	t.Helper()
 
-	// TODO: LokiStack requires a working S3-compatible backend (e.g. MinIO).
-	// The current test secret uses fake credentials against real AWS S3, so
-	// LokiStack pods never become healthy and these tests always time out.
-	// Re-enable once a MinIO fixture or real object storage is available.
-	t.Skip("Skipped: requires S3-compatible storage backend (MinIO) for LokiStack")
-
 	t.Run("Group 11: Usage Logs Collection", func(t *testing.T) {
 		tc = tc.WithT(t)
+		const sharedSecretName = "test-loki-shared-secret"
+		const lifecycleSecretName = "test-loki-lifecycle-secret"
 		t.Cleanup(func() {
 			tc.cleanupGroup(t, "")
+			tc.EnsureResourceGone(
+				WithMinimalObject(gvk.LokiStack, types.NamespacedName{Name: LokiStackName, Namespace: tc.MonitoringNamespace}),
+			)
+			tc.EnsureResourceGone(
+				WithMinimalObject(gvk.OpenTelemetryCollector, types.NamespacedName{Name: UsageLogsCollectorName, Namespace: tc.MonitoringNamespace}),
+			)
+			for _, secretName := range []string{sharedSecretName, lifecycleSecretName} {
+				tc.DeleteResource(
+					WithMinimalObject(gvk.Secret, types.NamespacedName{Name: secretName, Namespace: tc.MonitoringNamespace}),
+					WithIgnoreNotFound(true),
+					WithWaitForDeletion(true),
+				)
+			}
+			tc.cleanupSeaweedFS()
 		})
 
 		// Test 1: Validate not deployed without config (modifies state, run first)
 		t.Run("Test Usage Logs Collector not deployed without usage logs config", tc.ValidateUsageLogsCollectorNotDeployedWithoutConfig)
 
 		// Setup shared resources once for validation tests
-		secretName := "test-loki-shared-secret"
+		tc.startSeaweedFS(t, lokiS3Bucket)
 		t.Run("Setup shared UsageLogs resources", func(t *testing.T) {
 			tc = tc.WithT(t)
-			tc.setupUsageLogsWithStorage(t, "s3", secretName)
+			tc.setupUsageLogsWithStorage(t, "s3", sharedSecretName)
 
 			// Wait for everything to be ready
 			tc.EnsureResourceExists(
@@ -248,7 +258,6 @@ func (tc *MonitoringTestCtx) ValidateUsageLogsLifecycle(t *testing.T) {
 	t.Cleanup(tc.resetMonitoringConfigToManaged)
 
 	secretName := "test-loki-lifecycle-secret"
-	t.Cleanup(func() { tc.cleanupLokiStackAndSecret(secretName) })
 
 	// Step 1: Enable usage logs
 	tc.setupUsageLogsWithStorage(t, "s3", secretName)
