@@ -44,7 +44,6 @@ const (
 func fixturePodSecurityContext() *corev1.PodSecurityContext {
 	return &corev1.PodSecurityContext{
 		RunAsNonRoot: new(true),
-		RunAsUser:    new(int64(1000)),
 		SeccompProfile: &corev1.SeccompProfile{
 			Type: corev1.SeccompProfileTypeRuntimeDefault,
 		},
@@ -127,7 +126,12 @@ func (tc *MonitoringTestCtx) startSeaweedFS(t *testing.T, bucket string) {
 					InitialDelaySeconds: 10,
 					PeriodSeconds:       5,
 				},
+				VolumeMounts:    []corev1.VolumeMount{{Name: "data", MountPath: "/data"}},
 				SecurityContext: fixtureContainerSecurityContext(),
+			}},
+			Volumes: []corev1.Volume{{
+				Name:         "data",
+				VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
 			}},
 		},
 	})
