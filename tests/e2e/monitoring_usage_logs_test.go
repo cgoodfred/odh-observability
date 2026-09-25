@@ -357,7 +357,7 @@ func (tc *MonitoringTestCtx) ValidateUsageLogsLokiStackDeployment(t *testing.T) 
 			jq.Match(`.spec.size == "1x.extra-small"`),
 			jq.Match(`.spec.storage.secret.type == "s3"`),
 			jq.Match(`.spec.storage.secret.credentialMode == "static"`),
-			jq.Match(`.spec.storageClassName == "gp3-csi"`),
+			jq.Match(`.spec.storageClassName == "%s"`, tc.DefaultStorageClass),
 			jq.Match(`.spec.tenants.mode == "openshift-logging"`),
 		)),
 		WithCustomErrorMsg("LokiStack should be created with correct storage configuration"),

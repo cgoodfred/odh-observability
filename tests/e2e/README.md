@@ -45,7 +45,7 @@ Pass test flags through `E2E_TEST_FLAGS` for local Make targets. The container r
 |------|---------|-------------|
 | `-api-mode` | `module` | `module` updates the Monitoring CR; `dsc` updates the existing DSCI |
 | `-dsci-cr-name` | `default-dsci` | DSCI name in DSC mode |
-| `-monitoring-namespace` | auto-detected | Namespace from `Monitoring.spec.namespace` if omitted |
+| `-monitoring-namespace` | auto-detected | Namespace from the operator when creating a Monitoring CR, or from an existing Monitoring CR |
 | `-monitoring-cr-name` | `default-monitoring` | Monitoring CR name |
 | `-install-operators` | `true` | Install dependent OLM operators when needed |
 | `-olm-timeout` | `5m` | Timeout for OLM installation |

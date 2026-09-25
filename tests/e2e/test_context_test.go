@@ -32,6 +32,7 @@ type TestContext struct {
 	MonitoringCRName    string
 	ApiMode             string
 	DSCICRName          string
+	DefaultStorageClass string
 
 	DefaultResourceOpts []ResourceOpts
 }
@@ -576,6 +577,7 @@ func (tc *TestContext) WithT(t *testing.T) *TestContext {
 		MonitoringCRName:    tc.MonitoringCRName,
 		ApiMode:             tc.ApiMode,
 		DSCICRName:          tc.DSCICRName,
+		DefaultStorageClass: tc.DefaultStorageClass,
 		DefaultResourceOpts: tc.DefaultResourceOpts,
 	}
 }
@@ -621,34 +623,42 @@ func (tc *TestContext) detectMonitoringNamespace(t *testing.T) string {
 	return ns
 }
 
-// ensureOperatorPodRunning waits for a ready odh-observability operator pod.
-func (tc *TestContext) ensureOperatorPodRunning(t *testing.T) {
+// ensureOperatorPodRunning waits for a ready operator pod and returns its
+// configured operand namespace, if present.
+func (tc *TestContext) ensureOperatorPodRunning(t *testing.T) string {
 	t.Helper()
 
+	var monitoringNamespace string
 	tc.g.Eventually(func() error {
-		pods := &unstructured.UnstructuredList{}
-		pods.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("PodList"))
+		pods := &corev1.PodList{}
 		if err := tc.client.List(tc.ctx, pods,
 			client.MatchingLabels{"app.kubernetes.io/name": "odh-observability"},
 		); err != nil {
 			return fmt.Errorf("listing odh-observability operator pods: %w", err)
 		}
 		for i := range pods.Items {
-			phase, _, _ := unstructured.NestedString(pods.Items[i].Object, "status", "phase")
-			if phase != "Running" {
+			pod := &pods.Items[i]
+			if pod.Status.Phase != corev1.PodRunning {
 				continue
 			}
-			conditions, _, _ := unstructured.NestedSlice(pods.Items[i].Object, "status", "conditions")
-			for _, condition := range conditions {
-				value, ok := condition.(map[string]any)
-				if ok && value["type"] == "Ready" && value["status"] == "True" {
-					return nil
+			for _, condition := range pod.Status.Conditions {
+				if condition.Type != corev1.PodReady || condition.Status != corev1.ConditionTrue {
+					continue
 				}
+				for _, container := range pod.Spec.Containers {
+					for _, env := range container.Env {
+						if env.Name == "MONITORING_NAMESPACE" {
+							monitoringNamespace = env.Value
+						}
+					}
+				}
+				return nil
 			}
 		}
 		return fmt.Errorf("no ready odh-observability operator pod found")
 	}).WithTimeout(5*time.Minute).Should(Succeed(),
 		"odh-observability operator must be deployed before monitoring e2e tests")
+	return monitoringNamespace
 }
 
 // ensureCRDExists verifies that a CRD is registered on the cluster and fails
@@ -665,7 +675,7 @@ func (tc *TestContext) ensureCRDExists(t *testing.T, g schema.GroupVersionKind) 
 	}
 }
 
-func (tc *TestContext) ensureDefaultStorageClass(t *testing.T) {
+func (tc *TestContext) ensureDefaultStorageClass(t *testing.T) string {
 	t.Helper()
 
 	storageClasses := &unstructured.UnstructuredList{}
@@ -679,10 +689,11 @@ func (tc *TestContext) ensureDefaultStorageClass(t *testing.T) {
 		annotations := storageClass.GetAnnotations()
 		if annotations["storageclass.kubernetes.io/is-default-class"] == "true" ||
 			annotations["storageclass.beta.kubernetes.io/is-default-class"] == "true" {
-			return
+			return storageClass.GetName()
 		}
 	}
 	t.Fatal("monitoring e2e tests require a default StorageClass for operand PVCs")
+	return ""
 }
 
 // OLM operator installation helpers.

@@ -148,6 +148,11 @@ func (tc *MonitoringTestCtx) ensureMonitoringCRExists(t *testing.T) {
 	tc.EventuallyResourceCreatedOrPatched(
 		WithMinimalObject(gvk.Monitoring, types.NamespacedName{Name: tc.MonitoringCRName}),
 		WithMutateFunc(func(u *unstructured.Unstructured) error {
+			if u.GetResourceVersion() == "" && tc.MonitoringNamespace != "" {
+				if err := unstructured.SetNestedField(u.Object, tc.MonitoringNamespace, "spec", "namespace"); err != nil {
+					return err
+				}
+			}
 			return jq.TransformPipeline(withManagementState(common.Managed))(u)
 		}),
 		WithCondition(jq.Match(`.spec.managementState == "%s"`, common.Managed)),
@@ -396,7 +401,7 @@ func (tc *MonitoringTestCtx) setupUsageLogsWithStorage(t *testing.T, storageType
 	tc.createLokiS3Secret(t, secretName, tc.MonitoringNamespace)
 	tc.updateMonitoringConfig(
 		withManagementState(common.Managed),
-		withUsageLogsStorage(storageType, secretName, ""),
+		withUsageLogsStorage(storageType, secretName, tc.DefaultStorageClass),
 	)
 }
 
@@ -735,9 +740,20 @@ func (tc *MonitoringTestCtx) registerMonitoringRestore(t *testing.T) {
 func (tc *MonitoringTestCtx) ensurePrerequisites(t *testing.T) {
 	t.Helper()
 
-	tc.ensureOperatorPodRunning(t)
+	operatorMonitoringNamespace := tc.ensureOperatorPodRunning(t)
+	if tc.ApiMode == APIModeModule && tc.MonitoringNamespace == "" {
+		_, err := tc.fetchResource(t, gvk.Monitoring, types.NamespacedName{Name: tc.MonitoringCRName})
+		switch {
+		case err == nil:
+			tc.MonitoringNamespace = tc.detectMonitoringNamespace(t)
+		case k8serr.IsNotFound(err):
+			tc.MonitoringNamespace = operatorMonitoringNamespace
+		default:
+			t.Fatalf("failed to check existing Monitoring CR %s: %v", tc.MonitoringCRName, err)
+		}
+	}
 	tc.ensureCRDExists(t, gvk.Monitoring)
-	tc.ensureDefaultStorageClass(t)
+	tc.DefaultStorageClass = tc.ensureDefaultStorageClass(t)
 
 	if tc.ApiMode == APIModeDSC {
 		tc.ensureCRDExists(t, gvk.DSCInitialization)
