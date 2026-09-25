@@ -743,7 +743,7 @@ func (tc *MonitoringTestCtx) registerMonitoringRestore(t *testing.T) {
 func (tc *MonitoringTestCtx) ensurePrerequisites(t *testing.T) {
 	t.Helper()
 
-	operatorMonitoringNamespace := tc.ensureOperatorPodRunning(t)
+	operatorMonitoringNamespace := tc.ensureOperatorDeploymentReady(t)
 	if tc.ApiMode == APIModeModule && tc.MonitoringNamespace == "" {
 		_, err := tc.fetchResource(t, gvk.Monitoring, types.NamespacedName{Name: tc.MonitoringCRName})
 		switch {

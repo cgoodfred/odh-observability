@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
+	appsv1 "k8s.io/api/apps/v1"
 	k8serr "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -624,39 +624,47 @@ func (tc *TestContext) detectMonitoringNamespace(t *testing.T) string {
 	return ns
 }
 
-// ensureOperatorPodRunning waits for a ready operator pod and returns its
-// configured operand namespace, if present.
-func (tc *TestContext) ensureOperatorPodRunning(t *testing.T) string {
+// ensureOperatorDeploymentReady waits for the unique odh-observability
+// Deployment and returns the operand namespace from its manager container.
+func (tc *TestContext) ensureOperatorDeploymentReady(t *testing.T) string {
 	t.Helper()
 
 	var monitoringNamespace string
 	tc.g.Eventually(func() error {
-		pods := &corev1.PodList{}
-		if err := tc.client.List(tc.ctx, pods,
-			client.MatchingLabels{"app.kubernetes.io/name": "odh-observability"},
-		); err != nil {
-			return fmt.Errorf("listing odh-observability operator pods: %w", err)
+		deployments := &appsv1.DeploymentList{}
+		if err := tc.client.List(tc.ctx, deployments, client.MatchingFields{"metadata.name": "odh-observability"}); err != nil {
+			return fmt.Errorf("listing odh-observability Deployments: %w", err)
 		}
-		for i := range pods.Items {
-			pod := &pods.Items[i]
-			if pod.Status.Phase != corev1.PodRunning {
+		if len(deployments.Items) == 0 {
+			return errors.New("odh-observability Deployment not found")
+		}
+		if len(deployments.Items) != 1 {
+			return StopErr(fmt.Errorf("found %d odh-observability Deployments", len(deployments.Items)), "operator Deployment is ambiguous")
+		}
+
+		deployment := &deployments.Items[0]
+		replicas := int32(1)
+		if deployment.Spec.Replicas != nil {
+			replicas = *deployment.Spec.Replicas
+		}
+		if replicas == 0 || deployment.Status.ObservedGeneration < deployment.Generation ||
+			deployment.Status.Replicas != replicas || deployment.Status.UpdatedReplicas != replicas ||
+			deployment.Status.AvailableReplicas < replicas {
+			return fmt.Errorf("operator Deployment %s/%s is not fully available", deployment.Namespace, deployment.Name)
+		}
+
+		for _, container := range deployment.Spec.Template.Spec.Containers {
+			if container.Name != "manager" {
 				continue
 			}
-			for _, condition := range pod.Status.Conditions {
-				if condition.Type != corev1.PodReady || condition.Status != corev1.ConditionTrue {
-					continue
+			for _, env := range container.Env {
+				if env.Name == "MONITORING_NAMESPACE" && env.Value != "" {
+					monitoringNamespace = env.Value
+					return nil
 				}
-				for _, container := range pod.Spec.Containers {
-					for _, env := range container.Env {
-						if env.Name == "MONITORING_NAMESPACE" {
-							monitoringNamespace = env.Value
-						}
-					}
-				}
-				return nil
 			}
 		}
-		return errors.New("no ready odh-observability operator pod found")
+		return StopErr(errors.New("MONITORING_NAMESPACE is missing from the manager container"), "operator Deployment is missing its monitoring namespace")
 	}).WithTimeout(5*time.Minute).Should(Succeed(),
 		"odh-observability operator must be deployed before monitoring e2e tests")
 	return monitoringNamespace
