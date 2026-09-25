@@ -25,14 +25,8 @@ func (tc *MonitoringTestCtx) runUsageLogsCollectionTests(t *testing.T) {
 		tc = tc.WithT(t)
 		const sharedSecretName = "test-loki-shared-secret"
 		const lifecycleSecretName = "test-loki-lifecycle-secret"
+		t.Cleanup(tc.cleanupSeaweedFS)
 		t.Cleanup(func() {
-			tc.cleanupGroup(t, "")
-			tc.EnsureResourceGone(
-				WithMinimalObject(gvk.LokiStack, types.NamespacedName{Name: LokiStackName, Namespace: tc.MonitoringNamespace}),
-			)
-			tc.EnsureResourceGone(
-				WithMinimalObject(gvk.OpenTelemetryCollector, types.NamespacedName{Name: UsageLogsCollectorName, Namespace: tc.MonitoringNamespace}),
-			)
 			for _, secretName := range []string{sharedSecretName, lifecycleSecretName} {
 				tc.DeleteResource(
 					WithMinimalObject(gvk.Secret, types.NamespacedName{Name: secretName, Namespace: tc.MonitoringNamespace}),
@@ -40,8 +34,8 @@ func (tc *MonitoringTestCtx) runUsageLogsCollectionTests(t *testing.T) {
 					WithWaitForDeletion(true),
 				)
 			}
-			tc.cleanupSeaweedFS()
 		})
+		t.Cleanup(func() { tc.cleanupGroup(t, "") })
 
 		// Test 1: Validate not deployed without config (modifies state, run first)
 		t.Run("Test Usage Logs Collector not deployed without usage logs config", tc.ValidateUsageLogsCollectorNotDeployedWithoutConfig)
@@ -153,7 +147,7 @@ func (tc *MonitoringTestCtx) ValidateUsageLogsCollectorDeployment(t *testing.T) 
 		WithCondition(And(
 			jq.Match(`.spec.mode == "deployment"`),
 			jq.Match(`.spec.replicas == 2`),
-			monitoringOwnerReferencesCondition,
+			tc.monitoringOwnerReferencesCondition(),
 		)),
 		WithCustomErrorMsg("Logs OpenTelemetryCollector should be created in deployment mode with 2 replicas"),
 	)
@@ -359,7 +353,7 @@ func (tc *MonitoringTestCtx) ValidateUsageLogsLokiStackDeployment(t *testing.T) 
 			Namespace: tc.MonitoringNamespace,
 		}),
 		WithCondition(And(
-			monitoringOwnerReferencesCondition,
+			tc.monitoringOwnerReferencesCondition(),
 			jq.Match(`.spec.size == "1x.extra-small"`),
 			jq.Match(`.spec.storage.secret.type == "s3"`),
 			jq.Match(`.spec.storage.secret.credentialMode == "static"`),

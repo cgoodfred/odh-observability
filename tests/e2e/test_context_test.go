@@ -621,29 +621,34 @@ func (tc *TestContext) detectMonitoringNamespace(t *testing.T) string {
 	return ns
 }
 
-// ensureOperatorPodRunning verifies that at least one odh-observability
-// operator pod is Running on the cluster. Fails immediately if not found.
+// ensureOperatorPodRunning waits for a ready odh-observability operator pod.
 func (tc *TestContext) ensureOperatorPodRunning(t *testing.T) {
 	t.Helper()
 
-	pods := &unstructured.UnstructuredList{}
-	pods.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("PodList"))
-
-	err := tc.client.List(tc.ctx, pods,
-		client.MatchingLabels{"app.kubernetes.io/name": "odh-observability"},
-	)
-	if err != nil {
-		t.Fatalf("failed to list operator pods: %v", err)
-	}
-
-	for i := range pods.Items {
-		phase, _, _ := unstructured.NestedString(pods.Items[i].Object, "status", "phase")
-		if phase == "Running" {
-			return
+	tc.g.Eventually(func() error {
+		pods := &unstructured.UnstructuredList{}
+		pods.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("PodList"))
+		if err := tc.client.List(tc.ctx, pods,
+			client.MatchingLabels{"app.kubernetes.io/name": "odh-observability"},
+		); err != nil {
+			return fmt.Errorf("listing odh-observability operator pods: %w", err)
 		}
-	}
-
-	t.Fatalf("no running odh-observability operator pod found on cluster — run 'make deploy' first")
+		for i := range pods.Items {
+			phase, _, _ := unstructured.NestedString(pods.Items[i].Object, "status", "phase")
+			if phase != "Running" {
+				continue
+			}
+			conditions, _, _ := unstructured.NestedSlice(pods.Items[i].Object, "status", "conditions")
+			for _, condition := range conditions {
+				value, ok := condition.(map[string]any)
+				if ok && value["type"] == "Ready" && value["status"] == "True" {
+					return nil
+				}
+			}
+		}
+		return fmt.Errorf("no ready odh-observability operator pod found")
+	}).WithTimeout(5*time.Minute).Should(Succeed(),
+		"odh-observability operator must be deployed before monitoring e2e tests")
 }
 
 // ensureCRDExists verifies that a CRD is registered on the cluster and fails
@@ -658,6 +663,26 @@ func (tc *TestContext) ensureCRDExists(t *testing.T, g schema.GroupVersionKind) 
 	if err != nil {
 		t.Fatalf("CRD %s/%s not found on cluster — is the operator deployed? (%v)", g.Group, g.Kind, err)
 	}
+}
+
+func (tc *TestContext) ensureDefaultStorageClass(t *testing.T) {
+	t.Helper()
+
+	storageClasses := &unstructured.UnstructuredList{}
+	storageClasses.SetGroupVersionKind(schema.GroupVersionKind{
+		Group: "storage.k8s.io", Version: "v1", Kind: "StorageClassList",
+	})
+	if err := tc.client.List(tc.ctx, storageClasses); err != nil {
+		t.Fatalf("failed to list StorageClasses: %v", err)
+	}
+	for _, storageClass := range storageClasses.Items {
+		annotations := storageClass.GetAnnotations()
+		if annotations["storageclass.kubernetes.io/is-default-class"] == "true" ||
+			annotations["storageclass.beta.kubernetes.io/is-default-class"] == "true" {
+			return
+		}
+	}
+	t.Fatal("monitoring e2e tests require a default StorageClass for operand PVCs")
 }
 
 // OLM operator installation helpers.
