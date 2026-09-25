@@ -81,6 +81,8 @@ const (
 )
 
 // monitoringOwnerReferencesCondition validates ownership by the configured Monitoring CR.
+//
+//nolint:ireturn // Gomega's And matcher returns the GomegaMatcher interface.
 func (tc *MonitoringTestCtx) monitoringOwnerReferencesCondition() gTypes.GomegaMatcher {
 	return And(
 		jq.Match(`.metadata.ownerReferences | length == 1`),
@@ -698,7 +700,7 @@ func (tc *MonitoringTestCtx) registerMonitoringRestore(t *testing.T) {
 
 	original, err := tc.fetchResource(t, kind, nn)
 	existed := err == nil
-	if err != nil && !(tc.ApiMode == APIModeModule && k8serr.IsNotFound(err)) {
+	if err != nil && (tc.ApiMode != APIModeModule || !k8serr.IsNotFound(err)) {
 		t.Fatalf("failed to record original %s %s: %v", kind.Kind, nn.Name, err)
 	}
 

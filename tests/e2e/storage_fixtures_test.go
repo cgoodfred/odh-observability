@@ -2,7 +2,6 @@ package e2e_test
 
 import (
 	"fmt"
-	"regexp"
 	"testing"
 	"time"
 
@@ -14,7 +13,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/opendatahub-io/odh-observability/internal/controller/gvk"
@@ -45,8 +43,8 @@ const (
 
 func fixturePodSecurityContext() *corev1.PodSecurityContext {
 	return &corev1.PodSecurityContext{
-		RunAsNonRoot: ptr.To(true),
-		RunAsUser:    ptr.To(int64(1000)),
+		RunAsNonRoot: new(true),
+		RunAsUser:    new(int64(1000)),
 		SeccompProfile: &corev1.SeccompProfile{
 			Type: corev1.SeccompProfileTypeRuntimeDefault,
 		},
@@ -55,7 +53,7 @@ func fixturePodSecurityContext() *corev1.PodSecurityContext {
 
 func fixtureContainerSecurityContext() *corev1.SecurityContext {
 	return &corev1.SecurityContext{
-		AllowPrivilegeEscalation: ptr.To(false),
+		AllowPrivilegeEscalation: new(false),
 		Capabilities: &corev1.Capabilities{
 			Drop: []corev1.Capability{"ALL"},
 		},
@@ -102,7 +100,7 @@ func (tc *MonitoringTestCtx) cleanupSeaweedFS() {
 
 func (tc *MonitoringTestCtx) startSeaweedFS(t *testing.T, bucket string) {
 	t.Helper()
-	require.Regexp(t, regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`), bucket)
+	require.Regexp(t, `^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`, bucket)
 	tc.cleanupSeaweedFS()
 
 	tc.createFixtureResource(t, gvk.Pod, &corev1.Pod{
@@ -205,7 +203,11 @@ func (tc *MonitoringTestCtx) startFakeGCS(t *testing.T) {
 
 	tc.waitForFixturePod(fakeGCSPodName, jq.Match(`.status.phase == "Running" and any(.status.conditions[]; .type == "Ready" and .status == "True")`))
 	baseURL := fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", fakeGCSServiceName, tc.MonitoringNamespace, fakeGCSPort)
-	script := fmt.Sprintf(`i=0; until curl -fsS -X POST -H 'Content-Type: application/json' -d '{"name":"%s"}' %q; do i=$((i+1)); [ "$i" -lt 60 ] || exit 1; sleep 2; done`, fakeGCSBucket, baseURL+"/storage/v1/b?project=fake-test-project")
+	script := fmt.Sprintf(
+		`i=0; until curl -fsS -X POST -H 'Content-Type: application/json' -d '{"name":"%s"}' %q; do i=$((i+1)); [ "$i" -lt 60 ] || exit 1; sleep 2; done`,
+		fakeGCSBucket,
+		baseURL+"/storage/v1/b?project=fake-test-project",
+	)
 	tc.createBucketPod(t, fakeGCSBucketPod, fakeGCSClientImage, script)
 }
 

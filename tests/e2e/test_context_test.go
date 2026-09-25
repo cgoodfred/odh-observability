@@ -2,6 +2,7 @@ package e2e_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -655,7 +656,7 @@ func (tc *TestContext) ensureOperatorPodRunning(t *testing.T) string {
 				return nil
 			}
 		}
-		return fmt.Errorf("no ready odh-observability operator pod found")
+		return errors.New("no ready odh-observability operator pod found")
 	}).WithTimeout(5*time.Minute).Should(Succeed(),
 		"odh-observability operator must be deployed before monitoring e2e tests")
 	return monitoringNamespace

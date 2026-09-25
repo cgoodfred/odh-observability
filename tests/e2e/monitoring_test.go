@@ -1316,9 +1316,10 @@ func (tc *MonitoringTestCtx) validateTempoStackCreationAndPersesTLS(t *testing.T
 	tc.validateTempoStackCreation(t, backend, secretName, monitoringCondition, monitoringErrorMsg)
 	tc.validatePersesDatasourceTLS(t, backend, secretName)
 	if backend == TracesStorageBackendGCS {
+		endpoint := fmt.Sprintf("http://%s.%s.svc.cluster.local:%d/storage/v1/", fakeGCSServiceName, tc.MonitoringNamespace, fakeGCSPort)
 		tc.EnsureResourceExistsConsistently(
 			WithMinimalObject(gvk.TempoStack, types.NamespacedName{Name: TempoStackName, Namespace: tc.MonitoringNamespace}),
-			WithCondition(jq.Match(`.spec.extraConfig.tempo.storage.trace.gcs.endpoint == "http://%s.%s.svc.cluster.local:%d/storage/v1/"`, fakeGCSServiceName, tc.MonitoringNamespace, fakeGCSPort)),
+			WithCondition(jq.Match(`.spec.extraConfig.tempo.storage.trace.gcs.endpoint == "%s"`, endpoint)),
 			WithCustomErrorMsg("TempoStack should retain the fake GCS endpoint across monitoring reconciliation"),
 		)
 	}
@@ -1391,9 +1392,10 @@ func (tc *MonitoringTestCtx) validateTempoStackCreation(t *testing.T, backend, s
 		WithCustomErrorMsg("Monitoring should become Ready with %s traces storage", backend),
 	)
 	if backend == TracesStorageBackendGCS {
+		endpoint := fmt.Sprintf("http://%s.%s.svc.cluster.local:%d/storage/v1/", fakeGCSServiceName, tc.MonitoringNamespace, fakeGCSPort)
 		tc.EnsureResourceExists(
 			WithMinimalObject(gvk.TempoStack, tempoStack),
-			WithCondition(jq.Match(`.spec.extraConfig.tempo.storage.trace.gcs.endpoint == "http://%s.%s.svc.cluster.local:%d/storage/v1/"`, fakeGCSServiceName, tc.MonitoringNamespace, fakeGCSPort)),
+			WithCondition(jq.Match(`.spec.extraConfig.tempo.storage.trace.gcs.endpoint == "%s"`, endpoint)),
 			WithCustomErrorMsg("TempoStack should keep the fake GCS endpoint after reconciliation"),
 		)
 	}
