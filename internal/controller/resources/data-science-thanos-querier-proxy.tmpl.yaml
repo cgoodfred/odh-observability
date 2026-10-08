@@ -1,41 +1,17 @@
-# Aggregated ClusterRole granting "create" on metrics.k8s.io/pods.
-#
-# Perses uses POST for Prometheus queries. The namespace proxy's kube-rbac-proxy
-# derives the SAR verb from the HTTP method (POST -> "create"). OpenShift's
-# built-in view/edit/admin roles already grant "get" (covering GET requests),
-# but not "create". The metrics.k8s.io API is read-only so granting "create"
-# has no side-effects -- it only satisfies the SAR authorization check.
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: data-science-metrics-view
-  labels:
-    rbac.authorization.k8s.io/aggregate-to-admin: "true"
-    rbac.authorization.k8s.io/aggregate-to-edit: "true"
-    rbac.authorization.k8s.io/aggregate-to-view: "true"
-    platform.opendatahub.io/part-of: monitoring
-rules:
-  - apiGroups:
-      - metrics.k8s.io
-    resources:
-      - pods
-    verbs:
-      - create
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: data-science-prometheus-namespace-proxy
+  name: data-science-thanos-querier-proxy
   namespace: {{.Namespace}}
   labels:
-    app: data-science-prometheus-namespace-proxy
+    app: data-science-thanos-querier-proxy
     platform.opendatahub.io/part-of: monitoring
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: data-science-prometheus-namespace-proxy
+  name: data-science-thanos-querier-proxy
   labels:
     platform.opendatahub.io/part-of: monitoring
 roleRef:
@@ -44,13 +20,13 @@ roleRef:
   name: cluster-monitoring-view
 subjects:
   - kind: ServiceAccount
-    name: data-science-prometheus-namespace-proxy
+    name: data-science-thanos-querier-proxy
     namespace: {{.Namespace}}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: data-science-prometheus-namespace-proxy-auth-delegator
+  name: data-science-thanos-querier-proxy-auth-delegator
   labels:
     platform.opendatahub.io/part-of: monitoring
 roleRef:
@@ -59,21 +35,21 @@ roleRef:
   name: system:auth-delegator
 subjects:
   - kind: ServiceAccount
-    name: data-science-prometheus-namespace-proxy
+    name: data-science-thanos-querier-proxy
     namespace: {{.Namespace}}
 ---
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: data-science-prometheus-namespace-proxy-config
+  name: data-science-thanos-querier-proxy-config
   namespace: {{.Namespace}}
   labels:
-    app: data-science-prometheus-namespace-proxy
+    app: data-science-thanos-querier-proxy
     platform.opendatahub.io/part-of: monitoring
 data:
   kube-rbac-proxy.yaml: |
-    # See kube-rbac-proxy authorization configuration with namespace restriction doc for implementation, troubleshooting and usage examples:
-    # docs/NAMESPACE_RESTRICTED_METRICS.md
+    # Authenticate the caller and authorize access to the namespace selected by
+    # the query parameter before forwarding the request to Thanos.
     authorization:
       rewrites:
         byQueryParameter:
@@ -83,30 +59,31 @@ data:
         resource: pods
         namespace: "{{ "{{ .Value }}" }}"
 ---
-#
 # REQUIRED QUERY FORMAT: /api/v1/query?query=<promql>&namespace=<namespace-name>
 #
+# kube-rbac-proxy authenticates the caller and performs the namespace SAR. The
+# label proxy then constrains the PromQL query so a caller cannot use a valid
+# namespace parameter to retrieve another namespace's series.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: data-science-prometheus-namespace-proxy
+  name: data-science-thanos-querier-proxy
   namespace: {{.Namespace}}
   labels:
-    app: data-science-prometheus-namespace-proxy
+    app: data-science-thanos-querier-proxy
     platform.opendatahub.io/part-of: monitoring
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: data-science-prometheus-namespace-proxy
+      app: data-science-thanos-querier-proxy
   template:
     metadata:
       labels:
-        app: data-science-prometheus-namespace-proxy
+        app: data-science-thanos-querier-proxy
     spec:
-      serviceAccountName: data-science-prometheus-namespace-proxy
+      serviceAccountName: data-science-thanos-querier-proxy
       containers:
-        # kube-rbac-proxy for authentication and authorization
         - name: kube-rbac-proxy
           image: {{.KubeRBACProxyImage}}
           args:
@@ -140,9 +117,6 @@ spec:
             - name: tls
               mountPath: /etc/tls/private
               readOnly: true
-            - name: client-ca
-              mountPath: /etc/client-ca
-              readOnly: true
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
@@ -154,14 +128,11 @@ spec:
           image: {{.PromLabelProxyImage}}
           args:
             - --insecure-listen-address=127.0.0.1:9091
-            - --upstream=https://prometheus-operated.{{.Namespace}}.svc:9090
+            - --upstream=http://thanos-querier-data-science-thanos-querier.{{.Namespace}}.svc.cluster.local:10902
             - --label=namespace
             - --enable-label-apis
             # Reject duplicate namespace values from URL and POST form data.
             - --regex-match
-          env:
-            - name: SSL_CERT_DIR
-              value: /etc/prometheus-tls-ca:/etc/ssl/certs:/etc/pki/tls/certs
           resources:
             limits:
               cpu: 100m
@@ -170,10 +141,6 @@ spec:
               cpu: 50m
               memory: 64Mi
           terminationMessagePolicy: FallbackToLogsOnError
-          volumeMounts:
-            - name: prometheus-tls-ca
-              mountPath: /etc/prometheus-tls-ca
-              readOnly: true
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
@@ -184,20 +151,10 @@ spec:
       volumes:
         - name: config
           configMap:
-            name: data-science-prometheus-namespace-proxy-config
+            name: data-science-thanos-querier-proxy-config
         - name: tls
           secret:
-            secretName: data-science-prometheus-namespace-proxy-tls
-        - name: client-ca
-          configMap:
-            name: prometheus-client-ca
-            optional: true
-        - name: prometheus-tls-ca
-          configMap:
-            name: prometheus-web-tls-ca
-            items:
-              - key: service-ca.crt
-                path: ca.crt
+            secretName: data-science-thanos-querier-proxy-tls
       nodeSelector:
         kubernetes.io/os: linux
       securityContext:
@@ -206,13 +163,13 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: data-science-prometheus-namespace-proxy
+  name: data-science-thanos-querier-proxy
   namespace: {{.Namespace}}
   labels:
-    app: data-science-prometheus-namespace-proxy
+    app: data-science-thanos-querier-proxy
     platform.opendatahub.io/part-of: monitoring
   annotations:
-    service.beta.openshift.io/serving-cert-secret-name: data-science-prometheus-namespace-proxy-tls
+    service.beta.openshift.io/serving-cert-secret-name: data-science-thanos-querier-proxy-tls
 spec:
   type: ClusterIP
   ports:
@@ -221,4 +178,4 @@ spec:
       protocol: TCP
       targetPort: https
   selector:
-    app: data-science-prometheus-namespace-proxy
+    app: data-science-thanos-querier-proxy
