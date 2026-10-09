@@ -47,6 +47,7 @@ type thanosRouteProbe struct {
 	HTTPStatus       int
 	PrometheusStatus string
 	Labels           []map[string]string
+	ResponseBody     string
 }
 
 type prometheusQueryResponse struct {
@@ -71,12 +72,21 @@ func (tc *MonitoringTestCtx) ValidateThanosQuerierRouteNamespaceIsolation(t *tes
 		tc.withMetricsConfig(),
 	)
 
+	tc.EnsureResourceExists(
+		WithMinimalObject(gvk.Deployment, types.NamespacedName{
+			Name:      ThanosQuerierProxyName,
+			Namespace: tc.MonitoringNamespace,
+		}),
+		WithCondition(jq.Match(`.status.readyReplicas == 1`)),
+		WithCustomErrorMsg("Thanos Querier proxy should be ready before probing the Route"),
+	)
+
 	route := tc.EnsureResourceExists(
 		WithMinimalObject(gvk.Route, types.NamespacedName{
 			Name:      ThanosQuerierRouteName,
 			Namespace: tc.MonitoringNamespace,
 		}),
-		WithCondition(jq.Match(`.spec.host != null and .spec.host != "" and (.status.ingress | length) > 0`)),
+		WithCondition(jq.Match(`.spec.host != null and .spec.host != "" and ([.status.ingress[]?.conditions[]? | select(.type == "Admitted" and .status == "True")] | length) > 0`)),
 		WithCustomErrorMsg("Thanos Querier Route should have an admitted host before probing authorization"),
 	)
 	routeHost, found, err := unstructured.NestedString(route.Object, "spec", "host")
@@ -173,10 +183,28 @@ func (tc *MonitoringTestCtx) ValidateThanosQuerierRouteNamespaceIsolation(t *tes
 	authorizedToken := serviceAccountToken(t, tc, authorizedName)
 	restrictedToken := serviceAccountToken(t, tc, restrictedName)
 
-	anonymous := probeThanosRoute(t, rootCAs, routeHost, "", tc.MonitoringNamespace, thanosRouteProbeQuery)
+	// A ready proxy and admitted Route can precede the router's backend update.
+	// Retry only 503s; any other unexpected response should fail immediately.
+	var anonymous thanosRouteProbe
+	unavailableProbes := 0
+	deadline := time.Now().Add(2 * time.Minute)
+	for {
+		anonymous = probeThanosRoute(t, rootCAs, routeHost, "", tc.MonitoringNamespace, thanosRouteProbeQuery)
+		if anonymous.HTTPStatus != http.StatusServiceUnavailable {
+			break
+		}
+		unavailableProbes++
+		if !time.Now().Before(deadline) {
+			break
+		}
+		time.Sleep(5 * time.Second)
+	}
+	if unavailableProbes > 0 {
+		t.Logf("Thanos Route returned 503 for %d anonymous probe(s) before status %d", unavailableProbes, anonymous.HTTPStatus)
+	}
 	logThanosRouteEvidence(t, "anonymous", anonymous)
 	if anonymous.HTTPStatus != http.StatusUnauthorized && anonymous.HTTPStatus != http.StatusForbidden {
-		t.Fatalf("unauthenticated Thanos route request must be rejected with 401 or 403, got %d", anonymous.HTTPStatus)
+		t.Fatalf("unauthenticated Thanos route request must be rejected with 401 or 403, got %d: %q", anonymous.HTTPStatus, anonymous.ResponseBody)
 	}
 
 	restricted := probeThanosRoute(t, rootCAs, routeHost, restrictedToken, tc.MonitoringNamespace, thanosRouteProbeQuery)
@@ -308,12 +336,13 @@ func createAndRegisterProbeObject(t *testing.T, tc *MonitoringTestCtx, object cl
 func logThanosRouteEvidence(t *testing.T, persona string, probe thanosRouteProbe) {
 	t.Helper()
 	t.Logf(
-		"thanos route evidence persona=%s http_status=%d prometheus_status=%q series_count=%d namespaces=%v",
+		"thanos route evidence persona=%s http_status=%d prometheus_status=%q series_count=%d namespaces=%v response_body=%q",
 		persona,
 		probe.HTTPStatus,
 		probe.PrometheusStatus,
 		len(probe.Labels),
 		namespaceLabels(probe.Labels),
+		probe.ResponseBody,
 	)
 }
 
@@ -455,6 +484,11 @@ func executeThanosRouteRequest(rootCAs *x509.CertPool, request *http.Request) (t
 
 	probe := thanosRouteProbe{HTTPStatus: response.StatusCode}
 	if response.StatusCode != http.StatusOK {
+		body, err := io.ReadAll(io.LimitReader(response.Body, 4<<10))
+		if err != nil {
+			return probe, err
+		}
+		probe.ResponseBody = strings.TrimSpace(string(body))
 		return probe, nil
 	}
 
