@@ -177,3 +177,23 @@ func TestInstallPlanMatchesSource(t *testing.T) {
 		})
 	}
 }
+
+func TestRebaseForDSCIWithNumericConfig(t *testing.T) {
+	dsci := &unstructured.Unstructured{Object: map[string]any{
+		"spec": map[string]any{
+			"monitoring": map[string]any{"managementState": "Managed"},
+		},
+	}}
+
+	if err := rebaseForDSCI(withMetricsReplicas(1))(dsci); err != nil {
+		t.Fatalf("rebaseForDSCI: %v", err)
+	}
+
+	replicas, found, err := unstructured.NestedInt64(dsci.Object, "spec", "monitoring", "metrics", "replicas")
+	if err != nil || !found || replicas != 1 {
+		t.Fatalf("replicas: got %d, found %t, error %v", replicas, found, err)
+	}
+
+	// A subsequent client patch deep-copies this unstructured object.
+	dsci.DeepCopy()
+}

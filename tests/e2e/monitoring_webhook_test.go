@@ -620,13 +620,9 @@ func (tc *MonitoringTestCtx) ValidateWebhookSkipsWhenMonitoringDisabled(t *testi
 
 	tc.updateMonitoringConfig(withManagementState(common.Removed))
 
-	tc.EnsureResourceExists(
-		WithMinimalObject(gvk.Monitoring, types.NamespacedName{Name: tc.MonitoringCRName}),
-		WithCondition(jq.Match(`.status.phase == "%s"`, common.PhaseNotReady)),
-		WithCustomErrorMsg("Monitoring CR should reach Not Ready phase after setting managementState=Removed"),
-	)
+	tc.ensureMonitoringDisabled()
 
-	t.Logf("Monitoring disabled (phase=Not Ready), proceeding to test webhook behavior")
+	t.Log("Monitoring disabled, proceeding to test webhook behavior")
 
 	nsLabels := map[string]string{
 		ODHLabelMonitoring: "true",

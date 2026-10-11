@@ -178,20 +178,49 @@ func rebaseForDSCI(transforms ...jq.TransformFn) jq.TransformFn {
 			}
 		}
 
-		return unstructured.SetNestedField(dsci.Object, temp.Object["spec"], "spec", "monitoring")
+		// gojq emits Go ints for whole numbers, while Kubernetes unstructured
+		// objects require int64 values when SetNestedField deep-copies them.
+		return unstructured.SetNestedField(dsci.Object, normalizeJQNumbers(temp.Object["spec"]), "spec", "monitoring")
 	}
 }
 
+func normalizeJQNumbers(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, child := range typed {
+			typed[key] = normalizeJQNumbers(child)
+		}
+	case []any:
+		for index, child := range typed {
+			typed[index] = normalizeJQNumbers(child)
+		}
+	case int:
+		return int64(typed)
+	}
+
+	return value
+}
+
 // patchViaDSCI patches the DSCI's .spec.monitoring using rebaseForDSCI and waits
-// for the Monitoring CR to reach the expected phase. This is the single entry
-// point for all DSC-mode DSCI mutations.
+// for the Monitoring CR to reach the expected phase, or to be deleted when
+// monitoring is Removed. This is the single entry point for DSC-mode mutations.
 func (tc *MonitoringTestCtx) patchViaDSCI(expectedPhase common.Phase, transforms ...jq.TransformFn) {
-	tc.EventuallyResourcePatched(
+	dsci := tc.EventuallyResourcePatched(
 		WithMinimalObject(gvk.DSCInitialization, types.NamespacedName{Name: tc.DSCICRName}),
 		WithMutateFunc(func(u *unstructured.Unstructured) error {
 			return rebaseForDSCI(transforms...)(u)
 		}),
 	)
+	state, _, err := unstructured.NestedString(dsci.Object, "spec", "monitoring", "managementState")
+	if err != nil {
+		tc.t.Fatalf("read DSCI monitoring managementState: %v", err)
+	}
+	if state == string(common.Removed) {
+		tc.EnsureResourceGone(
+			WithMinimalObject(gvk.Monitoring, types.NamespacedName{Name: tc.MonitoringCRName}),
+		)
+		return
+	}
 
 	tc.EnsureResourceExists(
 		WithMinimalObject(gvk.Monitoring, types.NamespacedName{Name: tc.MonitoringCRName}),
@@ -364,7 +393,7 @@ func (tc *MonitoringTestCtx) resetMonitoringConfigToManaged() {
 }
 
 // resetMonitoringConfigToRemoved deletes optional config fields and sets managementState=Removed.
-// In DSC mode, it patches the DSCI and waits for the Monitoring CR to reflect NotReady.
+// In DSC mode, it patches the DSCI and waits for the Monitoring CR to be deleted.
 func (tc *MonitoringTestCtx) resetMonitoringConfigToRemoved() {
 	if tc.ApiMode == APIModeDSC {
 		tc.patchViaDSCI(common.PhaseNotReady,
@@ -397,6 +426,19 @@ func (tc *MonitoringTestCtx) resetMonitoringConfigToRemoved() {
 			Name:      OpenTelemetryCollectorName,
 			Namespace: tc.MonitoringNamespace,
 		}),
+	)
+}
+
+func (tc *MonitoringTestCtx) ensureMonitoringDisabled() {
+	monitoring := WithMinimalObject(gvk.Monitoring, types.NamespacedName{Name: tc.MonitoringCRName})
+	if tc.ApiMode == APIModeDSC {
+		tc.EnsureResourceGone(monitoring)
+		return
+	}
+
+	tc.EnsureResourceExists(
+		monitoring,
+		WithCondition(jq.Match(`.status.phase == "%s"`, common.PhaseNotReady)),
 	)
 }
 

@@ -65,7 +65,6 @@ type prometheusQueryResponse struct {
 func (tc *MonitoringTestCtx) ValidateThanosQuerierRouteNamespaceIsolation(t *testing.T) {
 	t.Helper()
 	tc = tc.WithT(t)
-	t.Cleanup(tc.resetMonitoringConfigToManaged)
 	tc.updateMonitoringConfig(
 		withManagementState(common.Managed),
 		tc.withMetricsConfig(),

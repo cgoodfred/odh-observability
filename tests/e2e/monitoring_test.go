@@ -953,6 +953,8 @@ func (tc *MonitoringTestCtx) runThanosQuerierTests(t *testing.T) {
 		tc = tc.WithT(t)
 		tc.cleanupGroup(t, "")
 
+		// Keep metrics running between cases so Prometheus can scrape targets
+		// and Thanos can discover its store before the route data probes.
 		t.Cleanup(func() {
 			tc.cleanupGroup(t, "")
 		})
@@ -978,7 +980,6 @@ func (tc *MonitoringTestCtx) runThanosQuerierTests(t *testing.T) {
 func (tc *MonitoringTestCtx) ValidateThanosQuerierNotDeployedWithoutMetrics(t *testing.T) {
 	t.Helper()
 	tc = tc.WithT(t)
-	t.Cleanup(tc.resetMonitoringConfigToManaged)
 
 	tc.updateMonitoringConfig(
 		withManagementState(common.Managed),
@@ -1017,7 +1018,6 @@ func (tc *MonitoringTestCtx) ValidateThanosQuerierNotDeployedWithoutMetrics(t *t
 func (tc *MonitoringTestCtx) ValidateThanosQuerierDeployment(t *testing.T) {
 	t.Helper()
 	tc = tc.WithT(t)
-	t.Cleanup(tc.resetMonitoringConfigToManaged)
 
 	tc.updateMonitoringConfig(
 		withManagementState(common.Managed),
@@ -1069,7 +1069,6 @@ func (tc *MonitoringTestCtx) ValidateThanosQuerierDeployment(t *testing.T) {
 func (tc *MonitoringTestCtx) ValidateThanosQuerierRouteAuthorizationBoundary(t *testing.T) {
 	t.Helper()
 	tc = tc.WithT(t)
-	t.Cleanup(tc.resetMonitoringConfigToManaged)
 	tc.updateMonitoringConfig(
 		withManagementState(common.Managed),
 		tc.withMetricsConfig(),
@@ -1158,7 +1157,6 @@ func (tc *MonitoringTestCtx) ValidateThanosQuerierRouteAuthorizationBoundary(t *
 func (tc *MonitoringTestCtx) ValidatePrometheusNetworkPolicyAllowsThanosQuerier(t *testing.T) {
 	t.Helper()
 	tc = tc.WithT(t)
-	t.Cleanup(tc.resetMonitoringConfigToManaged)
 
 	tc.updateMonitoringConfig(
 		withManagementState(common.Managed),
@@ -1791,6 +1789,10 @@ func (tc *MonitoringTestCtx) validatePersesDatasourceTLS(t *testing.T, backend, 
 func (tc *MonitoringTestCtx) ValidateInstrumentationCRTracesLifecycle(t *testing.T) {
 	t.Helper()
 	tc = tc.WithT(t)
+	expectedRetention := DefaultRetention
+	if tc.ApiMode == APIModeDSC {
+		expectedRetention = FormattedRetention
+	}
 
 	tc.updateMonitoringConfig(
 		withManagementState(common.Managed),
@@ -1801,7 +1803,7 @@ func (tc *MonitoringTestCtx) ValidateInstrumentationCRTracesLifecycle(t *testing
 		WithMinimalObject(gvk.Monitoring, types.NamespacedName{Name: tc.MonitoringCRName}),
 		WithCondition(And(
 			jq.Match(`.spec.traces != null`),
-			jq.Match(`.spec.traces.storage.retention == "%s"`, DefaultRetention),
+			jq.Match(`.spec.traces.storage.retention == "%s"`, expectedRetention),
 		)),
 		WithCustomErrorMsg("Monitoring resource should be updated with traces configuration"),
 	)
@@ -2764,11 +2766,7 @@ func (tc *MonitoringTestCtx) ValidateMonitoringServiceDisabled(t *testing.T) {
 
 	tc.resetMonitoringConfigToRemoved()
 
-	tc.EnsureResourceExists(
-		WithMinimalObject(gvk.Monitoring, types.NamespacedName{Name: tc.MonitoringCRName}),
-		WithCondition(jq.Match(`.status.phase == "%s"`, common.PhaseNotReady)),
-		WithCustomErrorMsg("Monitoring CR should be in Not Ready phase after setting managementState=Removed"),
-	)
+	tc.ensureMonitoringDisabled()
 
 	for _, resource := range []struct {
 		gvk       schema.GroupVersionKind
