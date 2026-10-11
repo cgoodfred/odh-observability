@@ -81,6 +81,7 @@ const (
 	UsageLogsOpenTelemetryCollectorRBACTemplate      = "resources/usage-logs-opentelemetry-collector-rbac.tmpl.yaml"
 	UsageLogsOpenTelemetryCollectorNPTemplate        = "resources/usage-logs-opentelemetry-collector-network-policy.tmpl.yaml"
 	UsageLogsLokiStackNPTemplate                     = "resources/usage-logs-lokistack-network-policy.tmpl.yaml"
+	UsageLogsOTLPServiceTemplate                     = "resources/usage-logs-otlp-service.tmpl.yaml"
 	LokiStackTemplate                                = "resources/loki-stack.tmpl.yaml"
 	ClusterLogForwarderTemplate                      = "resources/cluster-log-forwarder.tmpl.yaml"
 	ClusterLogForwarderRBACTemplate                  = "resources/cluster-log-forwarder-rbac.tmpl.yaml"
@@ -551,6 +552,7 @@ func deployUsageLogsCollector(
 		src(UsageLogsOpenTelemetryCollectorRBACTemplate),
 		src(UsageLogsOpenTelemetryCollectorNPTemplate),
 		src(UsageLogsLokiStackNPTemplate),
+		src(UsageLogsOTLPServiceTemplate),
 	)
 
 	return nil
