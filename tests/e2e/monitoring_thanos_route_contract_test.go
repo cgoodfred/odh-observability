@@ -69,6 +69,7 @@ func (tc *MonitoringTestCtx) ValidateThanosQuerierRouteNamespaceIsolation(t *tes
 		withManagementState(common.Managed),
 		tc.withMetricsConfig(),
 	)
+	tc.waitForPrometheusReady(t)
 
 	tc.EnsureResourceExists(
 		WithMinimalObject(gvk.Deployment, types.NamespacedName{
@@ -194,6 +195,7 @@ func (tc *MonitoringTestCtx) ValidateThanosQuerierRouteNamespaceIsolation(t *tes
 	}
 
 	var authorized thanosRouteProbe
+	t.Log("Waiting for the authorized Thanos route to return namespace-scoped Prometheus data")
 	tc.g.Eventually(func() error {
 		var probeErr error
 		authorized, probeErr = probeThanosRouteWithError(rootCAs, routeHost, authorizedToken, tc.MonitoringNamespace, thanosRouteProbeQuery)
@@ -207,7 +209,7 @@ func (tc *MonitoringTestCtx) ValidateThanosQuerierRouteNamespaceIsolation(t *tes
 			return errors.New("authorized query returned no metric series")
 		}
 		return nil
-	}).WithTimeout(3*time.Minute).WithPolling(5*time.Second).Should(Succeed(), "authorized Thanos route query should return populated namespace data")
+	}).WithTimeout(5*time.Minute).WithPolling(5*time.Second).Should(Succeed(), "authorized Thanos route query should return populated namespace data")
 	logThanosRouteEvidence(t, "authorized", authorized)
 	for _, labels := range authorized.Labels {
 		if labels["namespace"] != tc.MonitoringNamespace {

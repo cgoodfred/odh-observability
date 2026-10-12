@@ -296,7 +296,10 @@ func (tc *MonitoringTestCtx) updateMonitoringConfigWithOptions(opts ...ResourceO
 	baseOpts := make([]ResourceOpts, 0, 2+len(opts))
 	baseOpts = append(baseOpts,
 		WithMinimalObject(gvk.Monitoring, types.NamespacedName{Name: tc.MonitoringCRName}),
-		WithCondition(jq.Match(`.status.phase == "%s"`, common.PhaseReady)),
+		WithCondition(And(
+			jq.Match(`.status.phase == "%s"`, common.PhaseReady),
+			jq.Match(`.status.observedGeneration >= .metadata.generation`),
+		)),
 	)
 	tc.EventuallyResourcePatched(append(baseOpts, opts...)...)
 }
@@ -310,10 +313,36 @@ func (tc *MonitoringTestCtx) setupBaseMonitoring(t *testing.T) {
 // setupMetrics enables metrics configuration with default storage settings.
 func (tc *MonitoringTestCtx) setupMetrics(t *testing.T) {
 	t.Helper()
+	current, err := tc.fetchResource(t, gvk.Monitoring, types.NamespacedName{Name: tc.MonitoringCRName})
+	if err != nil && !k8serr.IsNotFound(err) {
+		t.Fatalf("read Monitoring CR before enabling metrics: %v", err)
+	}
+	metricsPresent := false
+	if err == nil {
+		_, metricsPresent, err = unstructured.NestedMap(current.Object, "spec", "metrics")
+		if err != nil {
+			t.Fatalf("read Monitoring metrics configuration: %v", err)
+		}
+	}
+	if !metricsPresent {
+		tc.waitForPrometheusPodsGone(t)
+	}
 	tc.updateMonitoringConfig(
 		withManagementState(common.Managed),
 		tc.withMetricsConfig(),
 	)
+	tc.waitForPrometheusReady(t)
+}
+
+// Restore the default metrics fixture after a subtest without tearing down the
+// shared Prometheus and Thanos workloads used by the rest of the metrics phase.
+func (tc *MonitoringTestCtx) resetMonitoringConfigToMetrics() {
+	tc.updateMonitoringConfig(
+		withManagementState(common.Managed),
+		tc.withMetricsConfig(),
+		jq.Transform(`del(.spec.traces, .spec.alerting, .spec.collectorReplicas, .spec.usageLogs, .spec.logs)`),
+	)
+	tc.waitForPrometheusReady(tc.t)
 }
 
 // cleanupGroup performs group-level cleanup, resetting monitoring to a clean state.
@@ -372,6 +401,7 @@ func (tc *MonitoringTestCtx) resetMonitoringConfigToManaged() {
 			Namespace: tc.MonitoringNamespace,
 		}),
 	)
+	tc.waitForPrometheusPodsGone(tc.t)
 
 	tc.EnsureResourceGone(
 		WithMinimalObject(gvk.ThanosQuerier, types.NamespacedName{

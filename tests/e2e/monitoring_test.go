@@ -41,19 +41,34 @@ func monitoringTestSuite(t *testing.T) {
 
 	monitoringServiceCtx.ensurePrerequisites(t)
 
-	t.Run("Base Configuration", monitoringServiceCtx.runBaseConfigurationTests)
-	t.Run("Metrics & MonitoringStack", monitoringServiceCtx.runMetricsAndMonitoringStackTests)
-	t.Run("Korrel8r", monitoringServiceCtx.runKorrel8rTests)
-	t.Run("OpenTelemetry Collector", monitoringServiceCtx.runCollectorTests)
-	t.Run("Target Allocator", monitoringServiceCtx.runTargetAllocatorTests)
-	t.Run("Thanos Querier", monitoringServiceCtx.runThanosQuerierTests)
+	t.Run("Baseline without metrics", func(t *testing.T) {
+		phaseCtx := monitoringServiceCtx.WithT(t)
+		t.Cleanup(phaseCtx.resetMonitoringConfigToManaged)
+		phaseCtx.resetMonitoringConfigToManaged()
+		t.Run("Base Configuration", phaseCtx.runBaseConfigurationTests)
+		t.Run("Negative Conditions", phaseCtx.runNegativeConditionTests)
+		t.Run("Target Allocator absent", phaseCtx.ValidateTargetAllocatorNotDeployedWithoutMetrics)
+		t.Run("Thanos Querier absent", phaseCtx.ValidateThanosQuerierNotDeployedWithoutMetrics)
+		t.Run("Perses absent", phaseCtx.ValidatePersesNotDeployedWithoutMetricsOrTraces)
+	})
+	t.Run("Metrics ready", func(t *testing.T) {
+		phaseCtx := monitoringServiceCtx.WithT(t)
+		t.Cleanup(func() { phaseCtx.cleanupGroup(t, "") })
+		phaseCtx.resetMonitoringConfigToManaged()
+		phaseCtx.setupMetrics(t)
+		t.Run("Metrics & MonitoringStack", phaseCtx.runMetricsAndMonitoringStackTests)
+		t.Run("Korrel8r", phaseCtx.runKorrel8rTests)
+		t.Run("OpenTelemetry Collector", phaseCtx.runCollectorTests)
+		t.Run("Target Allocator", phaseCtx.runTargetAllocatorTests)
+		t.Run("Thanos Querier", phaseCtx.runThanosQuerierTests)
+		t.Run("Networking and RBAC", phaseCtx.runNetworkingTests)
+	})
 	t.Run("Traces with PV Backend", monitoringServiceCtx.runTracesWithPVBackendTests)
 	t.Run("Traces with Cloud Storage", monitoringServiceCtx.runTracesWithCloudStorageTests)
 	t.Run("Perses", monitoringServiceCtx.runPersesTests)
-	t.Run("Networking and RBAC", monitoringServiceCtx.runNetworkingTests)
 	t.Run("Webhooks", monitoringServiceCtx.runWebhookTests)
 	t.Run("Usage Logs Collection", monitoringServiceCtx.runUsageLogsCollectionTests)
-	t.Run("Negative Conditions", monitoringServiceCtx.runNegativeConditionTests)
+	t.Run("Lifecycle", monitoringServiceCtx.runMonitoringLifecycleTests)
 	t.Run("Disabled", monitoringServiceCtx.runDisabledTests)
 }
 
@@ -68,10 +83,6 @@ func (tc *MonitoringTestCtx) runBaseConfigurationTests(t *testing.T) {
 	t.Run("Group 1: Base Configuration", func(t *testing.T) {
 		tc = tc.WithT(t)
 		tc.setupBaseMonitoring(t)
-
-		t.Cleanup(func() {
-			tc.cleanupGroup(t, "")
-		})
 
 		t.Run("Test Traces default content", tc.ValidateMonitoringCRDefaultTracesContent)
 	})
@@ -104,16 +115,9 @@ func (tc *MonitoringTestCtx) runMetricsAndMonitoringStackTests(t *testing.T) {
 
 	t.Run("Group 2: Metrics & MonitoringStack", func(t *testing.T) {
 		tc = tc.WithT(t)
-		tc.setupMetrics(t)
-
-		t.Cleanup(func() {
-			tc.cleanupGroup(t, "")
-		})
 
 		t.Run("Test Metrics MonitoringStack CR Creation", tc.ValidateMonitoringStackCRMetricsWhenSet)
 		t.Run("Test Metrics MonitoringStack CR Configuration", tc.ValidateMonitoringStackCRMetricsConfiguration)
-		t.Run("Test Metrics Replicas Configuration", tc.ValidateMonitoringStackCRMetricsReplicasUpdate)
-		t.Run("Test Prometheus rules lifecycle", tc.ValidatePrometheusRulesLifecycle)
 		t.Run("Test Prometheus Self ServiceMonitor TLS Fix", tc.ValidatePrometheusSelfServiceMonitorTLSFix)
 		t.Run("Test ownerReference and resourceVersion stability", tc.ValidateReconciliationStability)
 	})
@@ -211,7 +215,7 @@ func (tc *MonitoringTestCtx) ValidatePrometheusRulesLifecycle(t *testing.T) {
 func (tc *MonitoringTestCtx) ValidatePrometheusSelfServiceMonitorTLSFix(t *testing.T) {
 	t.Helper()
 	tc = tc.WithT(t)
-	t.Cleanup(tc.resetMonitoringConfigToManaged)
+	t.Cleanup(tc.resetMonitoringConfigToMetrics)
 
 	tc.updateMonitoringConfig(
 		withManagementState(common.Managed),
@@ -389,11 +393,6 @@ func (tc *MonitoringTestCtx) runCollectorTests(t *testing.T) {
 
 	t.Run("Group 3: OpenTelemetry Collector", func(t *testing.T) {
 		tc = tc.WithT(t)
-		tc.setupMetrics(t)
-
-		t.Cleanup(func() {
-			tc.cleanupGroup(t, "")
-		})
 
 		t.Run("Test OpenTelemetry Collector Configurations", tc.ValidateOpenTelemetryCollectorConfigurations)
 		t.Run("Test OpenTelemetry Collector replicas", tc.ValidateMonitoringCRCollectorReplicas)
@@ -466,7 +465,7 @@ func (tc *MonitoringTestCtx) ValidateOpenTelemetryCollectorConfigurations(t *tes
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Helper()
 			tc = tc.WithT(t)
-			t.Cleanup(tc.resetMonitoringConfigToManaged)
+			t.Cleanup(tc.resetMonitoringConfigToMetrics)
 
 			tc.updateMonitoringConfig(testCase.transforms...)
 
@@ -671,21 +670,12 @@ func (tc *MonitoringTestCtx) runTargetAllocatorTests(t *testing.T) {
 
 	t.Run("Group 4: Target Allocator", func(t *testing.T) {
 		tc = tc.WithT(t)
-		tc.cleanupGroup(t, "")
-
-		t.Cleanup(func() {
-			tc.cleanupGroup(t, "")
-		})
-
-		t.Run("Test Target Allocator not deployed without metrics", tc.ValidateTargetAllocatorNotDeployedWithoutMetrics)
 
 		t.Run("With Metrics", func(t *testing.T) {
 			tc = tc.WithT(t)
-			tc.setupMetrics(t)
 
 			t.Run("Test Target Allocator deployment with metrics", tc.ValidateTargetAllocatorDeploymentWithMetrics)
 			t.Run("Test Target Allocator Service and ConfigMap", tc.ValidateTargetAllocatorServiceAndConfigMap)
-			t.Run("Test Target Allocator lifecycle", tc.ValidateTargetAllocatorLifecycle)
 			t.Run("Test Target Allocator RBAC configuration", tc.ValidateTargetAllocatorRBACConfiguration)
 		})
 	})
@@ -695,7 +685,6 @@ func (tc *MonitoringTestCtx) runTargetAllocatorTests(t *testing.T) {
 func (tc *MonitoringTestCtx) ValidateTargetAllocatorNotDeployedWithoutMetrics(t *testing.T) {
 	t.Helper()
 	tc = tc.WithT(t)
-	t.Cleanup(tc.resetMonitoringConfigToManaged)
 
 	tc.updateMonitoringConfig(
 		withManagementState(common.Managed),
@@ -739,7 +728,7 @@ func (tc *MonitoringTestCtx) ValidateTargetAllocatorNotDeployedWithoutMetrics(t 
 func (tc *MonitoringTestCtx) ValidateTargetAllocatorDeploymentWithMetrics(t *testing.T) {
 	t.Helper()
 	tc = tc.WithT(t)
-	t.Cleanup(tc.resetMonitoringConfigToManaged)
+	t.Cleanup(tc.resetMonitoringConfigToMetrics)
 
 	tc.updateMonitoringConfig(
 		withManagementState(common.Managed),
@@ -790,7 +779,7 @@ func (tc *MonitoringTestCtx) ValidateTargetAllocatorDeploymentWithMetrics(t *tes
 func (tc *MonitoringTestCtx) ValidateTargetAllocatorServiceAndConfigMap(t *testing.T) {
 	t.Helper()
 	tc = tc.WithT(t)
-	t.Cleanup(tc.resetMonitoringConfigToManaged)
+	t.Cleanup(tc.resetMonitoringConfigToMetrics)
 
 	tc.updateMonitoringConfig(
 		withManagementState(common.Managed),
@@ -821,7 +810,6 @@ func (tc *MonitoringTestCtx) ValidateTargetAllocatorServiceAndConfigMap(t *testi
 func (tc *MonitoringTestCtx) ValidateTargetAllocatorLifecycle(t *testing.T) {
 	t.Helper()
 	tc = tc.WithT(t)
-	t.Cleanup(tc.resetMonitoringConfigToManaged)
 
 	tc.updateMonitoringConfig(
 		withManagementState(common.Managed),
@@ -855,6 +843,7 @@ func (tc *MonitoringTestCtx) ValidateTargetAllocatorLifecycle(t *testing.T) {
 			Namespace: tc.MonitoringNamespace,
 		}),
 	)
+	tc.waitForPrometheusPodsGone(t)
 
 	tc.updateMonitoringConfig(
 		withManagementState(common.Managed),
@@ -875,7 +864,7 @@ func (tc *MonitoringTestCtx) ValidateTargetAllocatorLifecycle(t *testing.T) {
 func (tc *MonitoringTestCtx) ValidateTargetAllocatorRBACConfiguration(t *testing.T) {
 	t.Helper()
 	tc = tc.WithT(t)
-	t.Cleanup(tc.resetMonitoringConfigToManaged)
+	t.Cleanup(tc.resetMonitoringConfigToMetrics)
 
 	tc.updateMonitoringConfig(
 		withManagementState(common.Managed),
@@ -951,19 +940,9 @@ func (tc *MonitoringTestCtx) runThanosQuerierTests(t *testing.T) {
 
 	t.Run("Group 5: Thanos Querier", func(t *testing.T) {
 		tc = tc.WithT(t)
-		tc.cleanupGroup(t, "")
-
-		// Keep metrics running between cases so Prometheus can scrape targets
-		// and Thanos can discover its store before the route data probes.
-		t.Cleanup(func() {
-			tc.cleanupGroup(t, "")
-		})
-
-		t.Run("Test ThanosQuerier not deployed without metrics", tc.ValidateThanosQuerierNotDeployedWithoutMetrics)
 		t.Run("Test ThanosQuerier deployment with metrics", tc.ValidateThanosQuerierDeployment)
 		t.Run("Test ThanosQuerier route authorization boundary", tc.ValidateThanosQuerierRouteAuthorizationBoundary)
 		t.Run("Test ThanosQuerier route namespace isolation", tc.ValidateThanosQuerierRouteNamespaceIsolation)
-		t.Run("Test ThanosQuerier ingress NetworkPolicy connectivity", tc.ValidateThanosQuerierIngressConnectivity)
 		t.Run("Test Prometheus NetworkPolicy allows Thanos Querier on gRPC port", tc.ValidatePrometheusNetworkPolicyAllowsThanosQuerier)
 
 		t.Run("Component Isolation — Thanos", func(t *testing.T) {
@@ -1610,9 +1589,15 @@ func (tc *MonitoringTestCtx) runTracesWithCloudStorageTests(t *testing.T) {
 	t.Run("Group 7: Traces with Cloud Storage", func(t *testing.T) {
 		tc = tc.WithT(t)
 		t.Cleanup(func() {
-			tc.cleanupGroup(t, "s3-secret")
-			tc.cleanupGroup(t, "gcs-secret")
+			for _, secretName := range []string{"s3-secret", "gcs-secret"} {
+				tc.DeleteResource(
+					WithMinimalObject(gvk.Secret, types.NamespacedName{Name: secretName, Namespace: tc.MonitoringNamespace}),
+					WithIgnoreNotFound(true),
+					WithWaitForDeletion(true),
+				)
+			}
 		})
+		t.Cleanup(func() { tc.cleanupGroup(t, "") })
 
 		t.Run("Test TempoStack CR Creation with Cloud Storage", tc.ValidateTempoStackCRCreationWithCloudStorage)
 		t.Run("Test Instrumentation CR Traces lifecycle", tc.ValidateInstrumentationCRTracesLifecycle)
@@ -1839,7 +1824,9 @@ func (tc *MonitoringTestCtx) ValidateTracesExportersReservedNameValidation(t *te
 	t.Helper()
 	tc = tc.WithT(t)
 
-	tc.updateMonitoringConfig(
+	// The reserved exporter intentionally makes Monitoring not ready. Wait for
+	// its validation condition below instead of requiring the Ready phase.
+	tc.updateMonitoringConfigWithoutReady(
 		withManagementState(common.Managed),
 		withMonitoringTraces(TracesStorageBackendPV, "", "", ""),
 		withReservedTracesExporter(),
@@ -1867,23 +1854,34 @@ func (tc *MonitoringTestCtx) runPersesTests(t *testing.T) {
 		t.Cleanup(func() {
 			tc.cleanupGroup(t, "")
 		})
+		tc.setupMetrics(t)
 
 		t.Run("Perses Lifecycle", func(t *testing.T) {
 			tc = tc.WithT(t)
-			tc.setupMetrics(t)
 
 			t.Run("Test Perses deployment when monitoring is managed", tc.ValidatePersesCRCreation)
 			t.Run("Test Perses CR configuration", tc.ValidatePersesCRConfiguration)
-			t.Run("Test Perses lifecycle", tc.ValidatePersesLifecycle)
-			t.Run("Test Perses not deployed without metrics or traces", tc.ValidatePersesNotDeployedWithoutMetricsOrTraces)
 			t.Run("Test Perses NetworkPolicy creation", tc.ValidatePersesNetworkPolicy)
+		})
+		// The ingress probe needs a ready Perses source pod, including when this
+		// subtest is selected without the preceding Perses configuration checks.
+		t.Run("Test ThanosQuerier ingress NetworkPolicy connectivity", func(t *testing.T) {
+			probeCtx := tc.WithT(t)
+			probeCtx.EnsureResourceExists(
+				WithMinimalObject(gvk.Pod, types.NamespacedName{Name: persesPodName, Namespace: tc.MonitoringNamespace}),
+				WithCondition(And(
+					jq.Match(`.status.phase == "Running"`),
+					jq.Match(`.status.conditions[] | select(.type == "Ready") | .status == "True"`),
+				)),
+				WithEventuallyTimeout(prometheusTransitionTimeout),
+			)
+			probeCtx.ValidateThanosQuerierIngressConnectivity(t)
 		})
 
 		t.Run("Perses Datasource with Traces", func(t *testing.T) {
 			t.Run("Test Perses Datasource Creation with Traces", tc.ValidatePersesDatasourceCreationWithTraces)
 			t.Run("Test Perses Datasource Configuration", tc.ValidatePersesDatasourceConfiguration)
 			t.Run("Test PersesDatasource deployment with Prometheus", tc.ValidatePersesDatasourceWithPrometheus)
-			t.Run("Test PersesDatasource lifecycle", tc.ValidatePersesDatasourceLifecycle)
 		})
 
 		t.Run("Component Isolation — Perses", func(t *testing.T) {
@@ -2144,6 +2142,7 @@ func (tc *MonitoringTestCtx) ValidatePersesLifecycle(t *testing.T) {
 	tc.EnsureResourceGone(
 		WithMinimalObject(gvk.StatefulSet, types.NamespacedName{Name: PersesName, Namespace: tc.MonitoringNamespace}),
 	)
+	tc.waitForPrometheusPodsGone(t)
 
 	tc.updateMonitoringConfig(
 		withManagementState(common.Managed),
@@ -2161,7 +2160,6 @@ func (tc *MonitoringTestCtx) ValidatePersesLifecycle(t *testing.T) {
 func (tc *MonitoringTestCtx) ValidatePersesNotDeployedWithoutMetricsOrTraces(t *testing.T) {
 	t.Helper()
 	tc = tc.WithT(t)
-	t.Cleanup(tc.resetMonitoringConfigToManaged)
 
 	tc.updateMonitoringConfig(
 		withManagementState(common.Managed),
@@ -2393,6 +2391,7 @@ func (tc *MonitoringTestCtx) ValidatePersesDatasourceLifecycle(t *testing.T) {
 	tc.EnsureResourceGone(
 		WithMinimalObject(gvk.PersesDatasource, types.NamespacedName{Name: ClusterPrometheusDatasourceName, Namespace: tc.MonitoringNamespace}),
 	)
+	tc.waitForPrometheusPodsGone(t)
 
 	tc.updateMonitoringConfig(
 		withManagementState(common.Managed),
@@ -2422,11 +2421,6 @@ func (tc *MonitoringTestCtx) runNetworkingTests(t *testing.T) {
 
 	t.Run("Group 9: Networking and RBAC", func(t *testing.T) {
 		tc = tc.WithT(t)
-		tc.setupMetrics(t)
-
-		t.Cleanup(func() {
-			tc.cleanupGroup(t, "")
-		})
 
 		t.Run("Prometheus restricted resource configuration", tc.ValidatePrometheusRestrictedResourceConfiguration)
 		t.Run("Prometheus secure proxy authentication", tc.ValidatePrometheusSecureProxyAuthentication)
@@ -2754,8 +2748,51 @@ func (tc *MonitoringTestCtx) ValidateNodeMetricsEndpointRBACConfiguration(t *tes
 }
 
 // ========================================================================
-// Disabled / Cleanup
+// Lifecycle transitions and final cleanup
 // ========================================================================
+
+// Keep disruptive off/on checks after the steady-state integrations. Each
+// lifecycle case starts with ready metrics, so a focused -run selection still
+// has its own fixture and the full suite never tears down Prometheus between
+// Target Allocator and Thanos route checks.
+func (tc *MonitoringTestCtx) runMonitoringLifecycleTests(t *testing.T) {
+	t.Helper()
+	tc = tc.WithT(t)
+
+	t.Run("Group 13: Lifecycle", func(t *testing.T) {
+		tc = tc.WithT(t)
+		t.Run("Metrics replicas", func(t *testing.T) {
+			caseCtx := tc.WithT(t)
+			caseCtx.setupMetrics(t)
+			caseCtx.ValidateMonitoringStackCRMetricsReplicasUpdate(t)
+		})
+		t.Run("Target Allocator", func(t *testing.T) {
+			caseCtx := tc.WithT(t)
+			caseCtx.setupMetrics(t)
+			caseCtx.ValidateTargetAllocatorLifecycle(t)
+		})
+		t.Run("Perses", func(t *testing.T) {
+			caseCtx := tc.WithT(t)
+			caseCtx.setupMetrics(t)
+			caseCtx.ValidatePersesLifecycle(t)
+		})
+		t.Run("Perses datasource", func(t *testing.T) {
+			caseCtx := tc.WithT(t)
+			caseCtx.setupMetrics(t)
+			caseCtx.ValidatePersesDatasourceLifecycle(t)
+		})
+		t.Run("Prometheus rules", func(t *testing.T) {
+			caseCtx := tc.WithT(t)
+			caseCtx.setupMetrics(t)
+			caseCtx.ValidatePrometheusRulesLifecycle(t)
+		})
+		t.Run("Webhook when monitoring disabled", func(t *testing.T) {
+			caseCtx := tc.WithT(t)
+			caseCtx.setupMetrics(t)
+			caseCtx.ValidateWebhookSkipsWhenMonitoringDisabled(t)
+		})
+	})
+}
 
 func (tc *MonitoringTestCtx) runDisabledTests(t *testing.T) {
 	t.Helper()

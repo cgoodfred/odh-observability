@@ -40,7 +40,6 @@ func (tc *MonitoringTestCtx) runWebhookTests(t *testing.T) {
 		t.Run("Webhook skips explicitly opted-out namespace", tc.ValidateWebhookSkipsExplicitlyOptedOutNamespace)
 		t.Run("Webhook respects user opt-out", tc.ValidateWebhookRespectsUserOptOut)
 		t.Run("Webhook idempotency", tc.ValidateWebhookIdempotency)
-		t.Run("Webhook skips when monitoring disabled", tc.ValidateWebhookSkipsWhenMonitoringDisabled)
 	})
 }
 
@@ -603,22 +602,9 @@ func (tc *MonitoringTestCtx) ValidateWebhookSkipsWhenMonitoringDisabled(t *testi
 	t.Helper()
 	tc = tc.WithT(t)
 
-	t.Cleanup(func() {
-		tc.updateMonitoringConfig(
-			withManagementState(common.Managed),
-			tc.withMetricsConfig(),
-		)
-
-		tc.EnsureResourceExists(
-			WithMinimalObject(gvk.Monitoring, types.NamespacedName{Name: tc.MonitoringCRName}),
-			WithCondition(jq.Match(`.status.conditions[] | select(.type == "%s") | .status == "%s"`, common.ConditionTypeReady, metav1.ConditionTrue)),
-			WithCustomErrorMsg("Monitoring should be re-enabled after webhook disabled test"),
-		)
-	})
-
 	t.Logf("Disabling monitoring to test webhook behavior when monitoring is disabled")
 
-	tc.updateMonitoringConfig(withManagementState(common.Removed))
+	tc.resetMonitoringConfigToRemoved()
 
 	tc.ensureMonitoringDisabled()
 
