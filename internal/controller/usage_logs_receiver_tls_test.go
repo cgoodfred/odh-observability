@@ -55,6 +55,27 @@ func TestUsageLogsReceiverRendersTLS(t *testing.T) {
 	if err != nil || !found || selector["app.kubernetes.io/instance"] != namespace+".data-science-usage-logs" {
 		t.Fatalf("TLS Service must select usage logs collector pods: selector=%v, error=%v", selector, err)
 	}
+	assertUsageLogsTLSMounts(t, collector)
+	for _, protocol := range []string{"grpc", "http"} {
+		receiver, found, err := unstructured.NestedMap(collector.Object, "spec", "config", "receivers", "otlp", "protocols", protocol)
+		if err != nil || !found {
+			t.Fatalf("missing %s receiver: %v", protocol, err)
+		}
+		tls, ok := receiver["tls"].(map[string]any)
+		if !ok ||
+			tls["cert_file"] != "/etc/otel-collector/otlp-tls/tls.crt" ||
+			tls["key_file"] != "/etc/otel-collector/otlp-tls/tls.key" {
+			t.Errorf("%s receiver must load the mounted serving certificate", protocol)
+		}
+		if tls["reload_interval"] != "1h" {
+			t.Errorf("%s receiver must reload renewed serving certificates", protocol)
+		}
+	}
+}
+
+func assertUsageLogsTLSMounts(t *testing.T, collector *unstructured.Unstructured) {
+	t.Helper()
+
 	volumes, found, err := unstructured.NestedSlice(collector.Object, "spec", "volumes")
 	if err != nil || !found {
 		t.Fatalf("collector must mount serving certificate Secret: %v", err)
@@ -84,7 +105,10 @@ func TestUsageLogsReceiverRendersTLS(t *testing.T) {
 	}
 	certMountFound := false
 	for _, value := range mounts {
-		mount := value.(map[string]any)
+		mount, ok := value.(map[string]any)
+		if !ok {
+			t.Fatalf("expected volume mount object, got %T", value)
+		}
 		if mount["name"] == "usage-logs-otlp-tls" &&
 			mount["mountPath"] == "/etc/otel-collector/otlp-tls" &&
 			mount["readOnly"] == true {
@@ -93,20 +117,5 @@ func TestUsageLogsReceiverRendersTLS(t *testing.T) {
 	}
 	if !certMountFound {
 		t.Fatal("collector must mount the serving certificate read-only at its configured path")
-	}
-	for _, protocol := range []string{"grpc", "http"} {
-		receiver, found, err := unstructured.NestedMap(collector.Object, "spec", "config", "receivers", "otlp", "protocols", protocol)
-		if err != nil || !found {
-			t.Fatalf("missing %s receiver: %v", protocol, err)
-		}
-		tls, ok := receiver["tls"].(map[string]any)
-		if !ok ||
-			tls["cert_file"] != "/etc/otel-collector/otlp-tls/tls.crt" ||
-			tls["key_file"] != "/etc/otel-collector/otlp-tls/tls.key" {
-			t.Errorf("%s receiver must load the mounted serving certificate", protocol)
-		}
-		if tls["reload_interval"] != "1h" {
-			t.Errorf("%s receiver must reload renewed serving certificates", protocol)
-		}
 	}
 }
