@@ -82,20 +82,21 @@ func (tc *MonitoringTestCtx) runUsageLogsCollectionTests(t *testing.T) {
 	})
 }
 
-// ValidateUsageLogsReceiverTLS checks the operator-managed Service, serving
+// ValidateUsageLogsReceiverTLS checks the OpenTelemetry Operator's headless Service, serving
 // certificate, receiver configuration, and live OTLP/HTTP TLS behavior.
 func (tc *MonitoringTestCtx) ValidateUsageLogsReceiverTLS(t *testing.T) {
 	t.Helper()
 	tc = tc.WithT(t)
 
-	const serviceName = "data-science-usage-logs-otlp"
-	const secretName = "data-science-usage-logs-otlp-tls"
+	const serviceName = UsageLogsCollectorName + "-collector-headless"
+	const secretName = serviceName + "-tls"
 	const probeName = "usage-logs-otlp-tls-probe"
 
 	tc.EnsureResourceExists(
 		WithMinimalObject(gvk.Service, types.NamespacedName{Name: serviceName, Namespace: tc.MonitoringNamespace}),
 		WithCondition(jq.Match(`
 			.metadata.annotations."service.beta.openshift.io/serving-cert-secret-name" == "%s" and
+			.spec.clusterIP == "None" and
 			([.spec.ports[].port] | contains([4317, 4318]))
 		`, secretName)),
 	)

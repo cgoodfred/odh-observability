@@ -40,20 +40,14 @@ func TestUsageLogsReceiverRendersTLS(t *testing.T) {
 		byKind[objects[i].GetKind()] = objects[i].DeepCopy()
 	}
 	collector := byKind["OpenTelemetryCollector"]
-	service := byKind["Service"]
-	if collector == nil || service == nil {
-		t.Fatalf("expected collector and TLS Service; got %v", byKind)
+	if collector == nil {
+		t.Fatalf("expected usage logs collector; got %v", byKind)
 	}
-	if service.GetAnnotations()["service.beta.openshift.io/serving-cert-secret-name"] != usageLogsReceiverTLSSecretName {
-		t.Fatal("TLS Service must request an OpenShift serving certificate")
+	if byKind["Service"] != nil {
+		t.Fatal("usage logs collector must use the OpenTelemetry Operator's generated headless Service")
 	}
-	namespace, ok := data["Namespace"].(string)
-	if !ok {
-		t.Fatalf("expected string Namespace template data, got %T", data["Namespace"])
-	}
-	selector, found, err := unstructured.NestedStringMap(service.Object, "spec", "selector")
-	if err != nil || !found || selector["app.kubernetes.io/instance"] != namespace+".data-science-usage-logs" {
-		t.Fatalf("TLS Service must select usage logs collector pods: selector=%v, error=%v", selector, err)
+	if usageLogsReceiverTLSSecretName != collector.GetName()+"-collector-headless-tls" {
+		t.Fatal("serving certificate Secret must match the OpenTelemetry Operator's generated headless Service")
 	}
 	assertUsageLogsTLSMounts(t, collector)
 	for _, protocol := range []string{"grpc", "http"} {

@@ -74,8 +74,7 @@ const (
 	defaultCollectorCPURequest    = "100m"
 	defaultCollectorMemoryRequest = "256Mi"
 
-	usageLogsOTLPServiceName       = "data-science-usage-logs-otlp"
-	usageLogsReceiverTLSSecretName = "data-science-usage-logs-otlp-tls"
+	usageLogsReceiverTLSSecretName = "data-science-usage-logs-collector-headless-tls"
 
 	defaultTempoCPULimit      = "1"
 	defaultTempoMemoryLimit   = "1Gi"
@@ -226,7 +225,6 @@ func buildTemplateData(ctx context.Context, c client.Client, monitoring *v1alpha
 
 	// Usage logs collector configuration (independent of Loki storage resolution)
 	templateData["UsageLogsCollectorName"] = "data-science-usage-logs"
-	templateData["UsageLogsOTLPServiceName"] = usageLogsOTLPServiceName
 	templateData["UsageLogsReceiverTLSSecretName"] = usageLogsReceiverTLSSecretName
 	if usageLogs := monitoring.Spec.UsageLogs; usageLogs != nil && usageLogs.Storage != nil {
 		gatewayURL := fmt.Sprintf("https://%s-gateway-http.%s.svc.cluster.local:8080/api/logs/v1/application/otlp", lokiStackName, monitoringNamespace)
