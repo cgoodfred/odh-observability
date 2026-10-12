@@ -1240,15 +1240,22 @@ func (tc *MonitoringTestCtx) assertThanosPromQLResponds(t *testing.T, query stri
 	g.Expect(token).NotTo(BeEmpty(),
 		"Component=Thanos Assertion=promql-response: no bearer token available for query %q (set OC_TOKEN or use a token-auth kubeconfig)", query)
 
-	endpoint := fmt.Sprintf("https://%s/api/v1/query?query=%s", host, url.QueryEscape(query))
+	endpoint := url.URL{Scheme: "https", Host: host, Path: "/api/v1/query"}
+	parameters := endpoint.Query()
+	parameters.Set("query", query)
+	parameters.Set("namespace", tc.MonitoringNamespace)
+	endpoint.RawQuery = parameters.Encode()
 	httpClient := &http.Client{
-		Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}},
-		Timeout:   30 * time.Second,
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{
+			MinVersion: tls.VersionTLS12,
+			RootCAs:    clusterIngressCAPool(t, tc),
+		}},
+		Timeout: 30 * time.Second,
 	}
 
 	var seriesCount int
 	g.Eventually(func() error {
-		req, err := http.NewRequestWithContext(tc.Context(), http.MethodGet, endpoint, nil)
+		req, err := http.NewRequestWithContext(tc.Context(), http.MethodGet, endpoint.String(), nil)
 		if err != nil {
 			return err
 		}
@@ -1328,8 +1335,9 @@ func (tc *MonitoringTestCtx) ValidateThanosComponentBaselineFixture(t *testing.T
 	tc.EnsureResourceExists(
 		WithMinimalObject(gvk.Route, types.NamespacedName{Name: ThanosQuerierRouteName, Namespace: tc.MonitoringNamespace}),
 		WithCondition(And(
-			jq.Match(`.spec.to.name == "%s"`, thanosQuerierDeploymentName),
-			jq.Match(`.spec.tls.termination == "edge"`),
+			jq.Match(`.spec.to.name == "%s"`, ThanosQuerierProxyName),
+			jq.Match(`.spec.port.targetPort == "https"`),
+			jq.Match(`.spec.tls.termination == "reencrypt"`),
 		)),
 		WithCustomErrorMsg("Component=Thanos Assertion=promql-endpoint: Route %s does not publish the Thanos query endpoint", ThanosQuerierRouteName),
 	)
@@ -1342,9 +1350,9 @@ func (tc *MonitoringTestCtx) ValidateThanosComponentBaselineFixture(t *testing.T
 			"  • Rollout identity:   %s\n"+
 			"  • CR status:          ThanosQuerierAvailable=True\n"+
 			"  • Query readiness:    Deployment %s ready replicas up\n"+
-			"  • PromQL endpoint:    Route %s → %s (edge TLS)\n"+
+			"  • PromQL endpoint:    Route %s → %s (reencrypt TLS)\n"+
 			"  • PromQL response:    %s\n",
-		thanosRollout, thanosQuerierDeploymentName, ThanosQuerierRouteName, thanosQuerierDeploymentName, promqlResult)
+		thanosRollout, thanosQuerierDeploymentName, ThanosQuerierRouteName, ThanosQuerierProxyName, promqlResult)
 }
 
 func (tc *MonitoringTestCtx) ValidateThanosPersesDatasourceIntegration(t *testing.T) {
