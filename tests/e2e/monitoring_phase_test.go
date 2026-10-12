@@ -1,6 +1,7 @@
 package e2e_test
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -68,7 +69,7 @@ func (tc *MonitoringTestCtx) waitForPrometheusReady(t *testing.T) {
 			return err
 		}
 		if statefulSet.Spec.Replicas == nil || *statefulSet.Spec.Replicas == 0 {
-			return fmt.Errorf("Prometheus StatefulSet has no desired replicas")
+			return errors.New("Prometheus StatefulSet has no desired replicas")
 		}
 		want := *statefulSet.Spec.Replicas
 		if statefulSet.Status.ObservedGeneration < statefulSet.Generation ||
