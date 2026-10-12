@@ -204,6 +204,7 @@ func TestThanosQuerierProxyTemplateContract(t *testing.T) {
 		"name: \"namespace\"",
 		"apiGroup: metrics.k8s.io",
 		"resource: pods",
+		"verb: get",
 		"namespace: \"{{ .Value }}\"",
 	} {
 		if !strings.Contains(config, expected) {
@@ -695,24 +696,11 @@ func TestThanosQuerierRouteUsesAuthorizedProxy(t *testing.T) {
 func TestPrometheusNamespaceProxyTemplateContract(t *testing.T) {
 	resources := renderObservabilityTemplate(t, PrometheusNamespaceProxyTemplate, proxyTemplateData())
 
-	clusterRole := findRenderedResource(t, resources, "ClusterRole", "data-science-metrics-view")
-	if labels := clusterRole.GetLabels(); len(labels) != 4 || labels["rbac.authorization.k8s.io/aggregate-to-view"] != "true" ||
-		labels["rbac.authorization.k8s.io/aggregate-to-edit"] != "true" ||
-		labels["rbac.authorization.k8s.io/aggregate-to-admin"] != "true" ||
-		labels["platform.opendatahub.io/part-of"] != "monitoring" {
-		t.Fatalf("metrics ClusterRole must aggregate to view/edit/admin: %#v", labels)
+	for _, resource := range resources {
+		if resource.GetKind() == "ClusterRole" && resource.GetName() == "data-science-metrics-view" {
+			t.Fatal("namespace proxy must not aggregate extra permissions into view/edit/admin")
+		}
 	}
-	rules := nestedSlice(t, clusterRole, "rules")
-	if len(rules) != 1 {
-		t.Fatalf("expected one metrics ClusterRole rule, got %d", len(rules))
-	}
-	rule := asMap(t, rules[0])
-	if len(rule) != 3 {
-		t.Fatalf("metrics ClusterRole rule must not contain extra permissions: %#v", rule)
-	}
-	assertStringSet(t, rule, "apiGroups", []string{"metrics.k8s.io"})
-	assertStringSet(t, rule, "resources", []string{"pods"})
-	assertStringSet(t, rule, "verbs", []string{"create"})
 
 	assertClusterRoleBinding(
 		t,
@@ -739,6 +727,7 @@ func TestPrometheusNamespaceProxyTemplateContract(t *testing.T) {
 		"name: \"namespace\"",
 		"apiGroup: metrics.k8s.io",
 		"resource: pods",
+		"verb: get",
 		"namespace: \"{{ .Value }}\"",
 	} {
 		if !strings.Contains(config, expected) {
