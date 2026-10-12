@@ -182,11 +182,7 @@ func (tc *MonitoringTestCtx) ValidateThanosQuerierRouteNamespaceIsolation(t *tes
 		return nil
 	}).WithTimeout(5*time.Minute).WithPolling(5*time.Second).Should(Succeed(), "authorized Thanos route query should return populated namespace data")
 	logThanosRouteEvidence(t, "authorized", authorized)
-	for _, labels := range authorized.Labels {
-		if labels["namespace"] != tc.MonitoringNamespace {
-			t.Fatalf("authorized response returned a series outside %q: namespace=%q", tc.MonitoringNamespace, labels["namespace"])
-		}
-	}
+	assertThanosRouteNamespaceSeries(t, "authorized", authorized.Labels, tc.MonitoringNamespace)
 
 	// Prometheus POST queries are read-only and must work with only the metrics
 	// get permission granted above.
@@ -196,13 +192,12 @@ func (tc *MonitoringTestCtx) ValidateThanosQuerierRouteNamespaceIsolation(t *tes
 	}
 	logThanosRouteEvidence(t, "authorized-post", authorizedPOST)
 	if authorizedPOST.HTTPStatus != http.StatusOK || authorizedPOST.PrometheusStatus != "success" || len(authorizedPOST.Labels) == 0 {
-		t.Fatalf("authorized POST query should return namespace data, got http_status=%d prometheus_status=%q series_count=%d", authorizedPOST.HTTPStatus, authorizedPOST.PrometheusStatus, len(authorizedPOST.Labels))
+		t.Fatalf(
+			"authorized POST query should return namespace data, got http_status=%d prometheus_status=%q series_count=%d",
+			authorizedPOST.HTTPStatus, authorizedPOST.PrometheusStatus, len(authorizedPOST.Labels),
+		)
 	}
-	for _, labels := range authorizedPOST.Labels {
-		if labels["namespace"] != tc.MonitoringNamespace {
-			t.Fatalf("authorized POST response returned a series outside %q: namespace=%q", tc.MonitoringNamespace, labels["namespace"])
-		}
-	}
+	assertThanosRouteNamespaceSeries(t, "authorized POST", authorizedPOST.Labels, tc.MonitoringNamespace)
 
 	// Keep the selector broad enough to match the known series returned above;
 	// otherwise an empty response would make the namespace-boundary assertion vacuous.
@@ -214,11 +209,7 @@ func (tc *MonitoringTestCtx) ValidateThanosQuerierRouteNamespaceIsolation(t *tes
 	if len(crafted.Labels) == 0 {
 		t.Fatalf("authorized crafted-selector query returned no metric series")
 	}
-	for _, labels := range crafted.Labels {
-		if labels["namespace"] != tc.MonitoringNamespace {
-			t.Fatalf("crafted selector escaped the authorized namespace boundary: namespace=%q", labels["namespace"])
-		}
-	}
+	assertThanosRouteNamespaceSeries(t, "crafted selector", crafted.Labels, tc.MonitoringNamespace)
 
 	// Exercise the successful POST form separately from the conflicting-value
 	// rejection below. A GET-only contract would not prove that the proxy keeps
@@ -258,6 +249,15 @@ func assertAuthorizedThanosPost(t *testing.T, rootCAs *x509.CertPool, routeHost,
 	for _, labels := range probe.Labels {
 		if labels["namespace"] != namespace {
 			t.Fatalf("authorized POST response escaped the namespace boundary: namespace=%q", labels["namespace"])
+		}
+	}
+}
+
+func assertThanosRouteNamespaceSeries(t *testing.T, persona string, series []map[string]string, namespace string) {
+	t.Helper()
+	for _, labels := range series {
+		if labels["namespace"] != namespace {
+			t.Fatalf("%s response returned a series outside %q: namespace=%q", persona, namespace, labels["namespace"])
 		}
 	}
 }
