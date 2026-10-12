@@ -878,30 +878,6 @@ func asMap(t *testing.T, value any) map[string]any {
 	return result
 }
 
-func assertStringSet(t *testing.T, object map[string]any, field string, want []string) {
-	t.Helper()
-	got, found, err := unstructured.NestedStringSlice(object, field)
-	if err != nil || !found {
-		t.Fatalf("field %q is missing: found=%t error=%v", field, found, err)
-	}
-	wantSet := make(map[string]struct{}, len(want))
-	for _, value := range want {
-		wantSet[value] = struct{}{}
-	}
-	gotSet := make(map[string]struct{}, len(got))
-	for _, value := range got {
-		gotSet[value] = struct{}{}
-	}
-	if len(got) != len(gotSet) || len(gotSet) != len(wantSet) {
-		t.Fatalf("field %q: got %v, want exactly %v", field, got, want)
-	}
-	for value := range wantSet {
-		if _, found := gotSet[value]; !found {
-			t.Fatalf("field %q: got %v, want exactly %v", field, got, want)
-		}
-	}
-}
-
 func assertClusterRoleBinding(t *testing.T, binding unstructured.Unstructured, roleName, subjectName, subjectNamespace string) {
 	t.Helper()
 	roleRef, found, err := unstructured.NestedMap(binding.Object, "roleRef")
