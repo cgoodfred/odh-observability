@@ -47,8 +47,12 @@ func TestUsageLogsReceiverRendersTLS(t *testing.T) {
 	if service.GetAnnotations()["service.beta.openshift.io/serving-cert-secret-name"] != usageLogsReceiverTLSSecretName {
 		t.Fatal("TLS Service must request an OpenShift serving certificate")
 	}
+	namespace, ok := data["Namespace"].(string)
+	if !ok {
+		t.Fatalf("expected string Namespace template data, got %T", data["Namespace"])
+	}
 	selector, found, err := unstructured.NestedStringMap(service.Object, "spec", "selector")
-	if err != nil || !found || selector["app.kubernetes.io/instance"] != data["Namespace"].(string)+".data-science-usage-logs" {
+	if err != nil || !found || selector["app.kubernetes.io/instance"] != namespace+".data-science-usage-logs" {
 		t.Fatalf("TLS Service must select usage logs collector pods: selector=%v, error=%v", selector, err)
 	}
 	volumes, found, err := unstructured.NestedSlice(collector.Object, "spec", "volumes")
@@ -57,10 +61,18 @@ func TestUsageLogsReceiverRendersTLS(t *testing.T) {
 	}
 	secretVolumes := map[string]string{}
 	for _, value := range volumes {
-		volume := value.(map[string]any)
+		volume, ok := value.(map[string]any)
+		if !ok {
+			t.Fatalf("expected volume object, got %T", value)
+		}
 		secret, ok := volume["secret"].(map[string]any)
 		if ok {
-			secretVolumes[volume["name"].(string)] = secret["secretName"].(string)
+			name, nameOK := volume["name"].(string)
+			secretName, secretNameOK := secret["secretName"].(string)
+			if !nameOK || !secretNameOK {
+				t.Fatalf("expected string volume and Secret names, got volume=%v", volume)
+			}
+			secretVolumes[name] = secretName
 		}
 	}
 	if secretVolumes["usage-logs-otlp-tls"] != usageLogsReceiverTLSSecretName {
