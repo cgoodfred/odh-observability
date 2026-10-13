@@ -97,10 +97,6 @@ func (tc *MonitoringTestCtx) ValidateThanosQuerierRouteNamespaceIsolation(t *tes
 	identitySuffix := strconv.FormatInt(time.Now().UnixNano(), 10)
 	authorizedName := "thanos-route-authorized-" + identitySuffix
 	restrictedName := "thanos-route-restricted-" + identitySuffix
-	authorizedSA := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{
-		Name:      authorizedName,
-		Namespace: tc.MonitoringNamespace,
-	}}
 	restrictedSA := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{
 		Name:      restrictedName,
 		Namespace: tc.MonitoringNamespace,
@@ -112,36 +108,11 @@ func (tc *MonitoringTestCtx) ValidateThanosQuerierRouteNamespaceIsolation(t *tes
 			}
 		})
 	}
-	if err := tc.Client().Create(tc.Context(), authorizedSA); err != nil {
-		t.Fatalf("failed to create authorized probe ServiceAccount: %v", err)
-	}
-	registerProbeCleanup(authorizedSA)
 	if err := tc.Client().Create(tc.Context(), restrictedSA); err != nil {
 		t.Fatalf("failed to create restricted probe ServiceAccount: %v", err)
 	}
 	registerProbeCleanup(restrictedSA)
 	setupRestrictedProbeAccess(t, tc, restrictedName, identitySuffix, registerProbeCleanup)
-
-	roleBinding := &rbacv1.RoleBinding{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      authorizedName,
-			Namespace: tc.MonitoringNamespace,
-		},
-		RoleRef: rbacv1.RoleRef{
-			APIGroup: "rbac.authorization.k8s.io",
-			Kind:     "ClusterRole",
-			Name:     "view",
-		},
-		Subjects: []rbacv1.Subject{{
-			Kind:      "ServiceAccount",
-			Name:      authorizedName,
-			Namespace: tc.MonitoringNamespace,
-		}},
-	}
-	if err := tc.Client().Create(tc.Context(), roleBinding); err != nil {
-		t.Fatalf("failed to create authorized probe RoleBinding: %v", err)
-	}
-	registerProbeCleanup(roleBinding)
 
 	postRole := &rbacv1.Role{
 		ObjectMeta: metav1.ObjectMeta{
@@ -179,7 +150,7 @@ func (tc *MonitoringTestCtx) ValidateThanosQuerierRouteNamespaceIsolation(t *tes
 	}
 	registerProbeCleanup(postRoleBinding)
 
-	authorizedToken := serviceAccountToken(t, tc, authorizedName)
+	authorizedToken := authorizedThanosProbeToken(t, tc, authorizedName)
 	restrictedToken := serviceAccountToken(t, tc, restrictedName)
 
 	anonymous := waitForAnonymousThanosRoute(t, rootCAs, routeHost, tc.MonitoringNamespace)
@@ -390,6 +361,42 @@ func clusterIngressCAPool(t *testing.T, tc *MonitoringTestCtx) *x509.CertPool {
 		t.Fatalf("cluster ingress CA ConfigMap %q does not contain a valid PEM certificate bundle", clusterIngressCAConfigMap)
 	}
 	return rootCAs
+}
+
+// authorizedThanosProbeToken creates a namespace-scoped identity for Route
+// queries, independent of how the test runner authenticates to Kubernetes.
+func authorizedThanosProbeToken(t *testing.T, tc *MonitoringTestCtx, name string) string {
+	t.Helper()
+	serviceAccount := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{
+		Name: name, Namespace: tc.MonitoringNamespace,
+	}}
+	if err := tc.Client().Create(tc.Context(), serviceAccount); err != nil {
+		t.Fatalf("failed to create authorized probe ServiceAccount: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := tc.Client().Delete(tc.Context(), serviceAccount); err != nil && !k8serr.IsNotFound(err) {
+			t.Logf("failed to clean up authorized probe ServiceAccount %s: %v", name, err)
+		}
+	})
+
+	roleBinding := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: tc.MonitoringNamespace},
+		RoleRef: rbacv1.RoleRef{
+			APIGroup: "rbac.authorization.k8s.io", Kind: "ClusterRole", Name: "view",
+		},
+		Subjects: []rbacv1.Subject{{
+			Kind: "ServiceAccount", Name: name, Namespace: tc.MonitoringNamespace,
+		}},
+	}
+	if err := tc.Client().Create(tc.Context(), roleBinding); err != nil {
+		t.Fatalf("failed to create authorized probe RoleBinding: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := tc.Client().Delete(tc.Context(), roleBinding); err != nil && !k8serr.IsNotFound(err) {
+			t.Logf("failed to clean up authorized probe RoleBinding %s: %v", name, err)
+		}
+	})
+	return serviceAccountToken(t, tc, name)
 }
 
 func serviceAccountToken(t *testing.T, tc *MonitoringTestCtx, serviceAccountName string) string {

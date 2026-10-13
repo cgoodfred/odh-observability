@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1215,9 +1216,8 @@ func (tc *MonitoringTestCtx) assertThanosPromQLResponds(t *testing.T, query stri
 	}).ShouldNot(BeEmpty(),
 		"Component=Thanos Assertion=promql-response: Route %s has no ingress host", ThanosQuerierRouteName)
 
-	token := getAuthToken(tc.TestContext)
-	g.Expect(token).NotTo(BeEmpty(),
-		"Component=Thanos Assertion=promql-response: no bearer token available for query %q (set OC_TOKEN or use a token-auth kubeconfig)", query)
+	token := authorizedThanosProbeToken(t, tc,
+		"thanos-baseline-"+strconv.FormatInt(time.Now().UnixNano(), 10))
 
 	endpoint := url.URL{Scheme: "https", Host: host, Path: "/api/v1/query"}
 	parameters := endpoint.Query()
