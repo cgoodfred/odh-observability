@@ -228,7 +228,7 @@ func TestThanosQuerierProxyTemplateContract(t *testing.T) {
 		"--config-file=/etc/kube-rbac-proxy/kube-rbac-proxy.yaml",
 		"--tls-cert-file=/etc/tls/private/tls.crt",
 		"--tls-private-key-file=/etc/tls/private/tls.key",
-		"--tls-min-version=VersionTLS12",
+		"--tls-min-version="+proxyTLSVersion12,
 		"--tls-cipher-suites=TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
 		"--tls-curve-preferences=29,25",
 	)
@@ -765,7 +765,7 @@ func TestPrometheusNamespaceProxyTemplateContract(t *testing.T) {
 		"--config-file=/etc/kube-rbac-proxy/kube-rbac-proxy.yaml",
 		"--tls-cert-file=/etc/tls/private/tls.crt",
 		"--tls-private-key-file=/etc/tls/private/tls.key",
-		"--tls-min-version=VersionTLS12",
+		"--tls-min-version="+proxyTLSVersion12,
 		"--tls-cipher-suites=TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
 		"--tls-curve-preferences=29,25",
 	)
@@ -814,7 +814,7 @@ func TestPrometheusClusterProxyTemplateContract(t *testing.T) {
 		"--config-file=/etc/kube-rbac-proxy/config.yaml",
 		"--tls-cert-file=/etc/tls/private/tls.crt",
 		"--tls-private-key-file=/etc/tls/private/tls.key",
-		"--tls-min-version=VersionTLS12",
+		"--tls-min-version="+proxyTLSVersion12,
 		"--tls-cipher-suites=TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
 		"--tls-curve-preferences=29,25",
 		"--upstream-ca-file=/etc/prometheus-ca/service-ca.crt",
@@ -1068,7 +1068,7 @@ func proxyTemplateData() map[string]any {
 		"GatewayNamespace":    "",
 		"KubeRBACProxyImage":  "example.invalid/kube-rbac-proxy:test",
 		"PromLabelProxyImage": "example.invalid/prom-label-proxy:test",
-		"TLSMinVersion":       "VersionTLS12",
+		"TLSMinVersion":       proxyTLSVersion12,
 		"TLSCipherSuites":     "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
 		"TLSCurvePreferences": "29,25",
 	}
@@ -1087,7 +1087,7 @@ func TestProxyTemplatesTLS13OmitCipherRestriction(t *testing.T) {
 	for _, proxy := range proxyTemplates {
 		t.Run(proxy.deploymentName, func(t *testing.T) {
 			data := proxyTemplateData()
-			data["TLSMinVersion"] = "VersionTLS13"
+			data["TLSMinVersion"] = proxyTLSVersion13
 			data["TLSCipherSuites"] = ""
 			data["TLSCurvePreferences"] = "23,29"
 
@@ -1096,7 +1096,7 @@ func TestProxyTemplatesTLS13OmitCipherRestriction(t *testing.T) {
 			containers := nestedSliceAt(t, deployment, "spec", "template", "spec", "containers")
 			container := findContainer(t, containers, "kube-rbac-proxy")
 			assertContainerArgs(t, container,
-				"--tls-min-version=VersionTLS13",
+				"--tls-min-version="+proxyTLSVersion13,
 				"--tls-curve-preferences=23,29",
 			)
 			assertContainerArgAbsent(t, container, "--tls-cipher-suites=")

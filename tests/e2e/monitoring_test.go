@@ -20,6 +20,7 @@ import (
 	configv1 "github.com/openshift/api/config/v1"
 	ocpcrypto "github.com/openshift/library-go/pkg/crypto"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 	authenticationv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
 	k8serr "k8s.io/apimachinery/pkg/api/errors"
@@ -36,7 +37,6 @@ import (
 	"github.com/opendatahub-io/odh-observability/internal/controller/conditions"
 	"github.com/opendatahub-io/odh-observability/internal/controller/gvk"
 	jq "github.com/opendatahub-io/odh-observability/tests/e2e/matchers/jq"
-	"gopkg.in/yaml.v3"
 
 	. "github.com/onsi/gomega" //nolint:revive // dot import is idiomatic for gomega
 )
@@ -2925,8 +2925,8 @@ func (tc *MonitoringTestCtx) expectedClusterFIPSEnabled(t *testing.T) bool {
 
 func findProxyArg(args []string, prefix string) (string, bool) {
 	for _, arg := range args {
-		if strings.HasPrefix(arg, prefix) {
-			return strings.TrimPrefix(arg, prefix), true
+		if value, found := strings.CutPrefix(arg, prefix); found {
+			return value, true
 		}
 	}
 	return "", false

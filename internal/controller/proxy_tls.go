@@ -30,6 +30,8 @@ import (
 )
 
 const (
+	proxyTLSVersion12     = "VersionTLS12"
+	proxyTLSVersion13     = "VersionTLS13"
 	curveIDSecP256r1      = 23
 	curveIDSecP384r1      = 24
 	curveIDSecP521r1      = 25
@@ -66,10 +68,10 @@ func addTLSData(ctx context.Context, c client.Client, templateData map[string]an
 		return fmt.Errorf("%w: %w", errProxyTLSResolutionFailed, err)
 	}
 
-	if minVersion != "VersionTLS12" && minVersion != "VersionTLS13" {
+	if minVersion != proxyTLSVersion12 && minVersion != proxyTLSVersion13 {
 		return fmt.Errorf("%w: unsupported minimum TLS version %q", errInvalidProxyTLSProfile, minVersion)
 	}
-	if minVersion == "VersionTLS13" {
+	if minVersion == proxyTLSVersion13 {
 		cipherSuites = ""
 	}
 
@@ -100,7 +102,7 @@ func filterProxyCurvePreferences(curvePreferences string, fipsEnabled bool) (str
 
 	var usable []string
 	seen := make(map[int]struct{})
-	for _, rawCurveID := range strings.Split(curvePreferences, ",") {
+	for rawCurveID := range strings.SplitSeq(curvePreferences, ",") {
 		curveID, err := strconv.Atoi(rawCurveID)
 		if err != nil {
 			return "", fmt.Errorf("invalid numeric TLS curve preference %q: %w", rawCurveID, err)

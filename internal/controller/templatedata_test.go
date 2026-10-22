@@ -53,7 +53,7 @@ func TestAddTLSDataResolvesEffectiveProxyProfile(t *testing.T) {
 		{
 			name:       "missing APIServer uses Intermediate defaults",
 			apiServer:  nil,
-			wantMin:    "VersionTLS12",
+			wantMin:    proxyTLSVersion12,
 			wantCipher: "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
 			wantCurves: "4588,29,23,24",
 		},
@@ -66,7 +66,7 @@ func TestAddTLSDataResolvesEffectiveProxyProfile(t *testing.T) {
 					TLSSecurityProfile: &configv1.TLSSecurityProfile{Type: configv1.TLSProfileModernType},
 				},
 			},
-			wantMin:    "VersionTLS12",
+			wantMin:    proxyTLSVersion12,
 			wantCipher: "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
 			wantCurves: "4588,29,23,24",
 		},
@@ -79,7 +79,7 @@ func TestAddTLSDataResolvesEffectiveProxyProfile(t *testing.T) {
 					TLSSecurityProfile: &configv1.TLSSecurityProfile{Type: configv1.TLSProfileModernType},
 				},
 			},
-			wantMin:    "VersionTLS12",
+			wantMin:    proxyTLSVersion12,
 			wantCipher: "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
 			wantCurves: "4588,29,23,24",
 		},
@@ -92,7 +92,7 @@ func TestAddTLSDataResolvesEffectiveProxyProfile(t *testing.T) {
 					TLSSecurityProfile: &configv1.TLSSecurityProfile{Type: configv1.TLSProfileModernType},
 				},
 			},
-			wantMin:    "VersionTLS13",
+			wantMin:    proxyTLSVersion13,
 			wantCipher: "",
 			wantCurves: "4588,29,23,24",
 		},
@@ -117,7 +117,7 @@ func TestAddTLSDataResolvesEffectiveProxyProfile(t *testing.T) {
 					},
 				},
 			},
-			wantMin:    "VersionTLS12",
+			wantMin:    proxyTLSVersion12,
 			wantCipher: "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
 			wantCurves: "29,25",
 		},
@@ -331,9 +331,11 @@ func TestAddTLSDataDistinguishesOperationalResolutionFailure(t *testing.T) {
 		}).
 		Build()
 
-	err := addTLSData(context.Background(), cli, map[string]any{})
+	templateData := map[string]any{}
+	err := addTLSData(context.Background(), cli, templateData)
 	require.ErrorIs(t, err, errProxyTLSResolutionFailed)
 	require.NotErrorIs(t, err, errInvalidProxyTLSProfile)
+	assert.Empty(t, templateData)
 }
 
 func TestValidateExporters_ValidOTLP(t *testing.T) {
