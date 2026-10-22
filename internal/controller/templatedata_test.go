@@ -24,6 +24,7 @@ import (
 	configv1 "github.com/openshift/api/config/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -210,6 +211,87 @@ func TestFilterProxyCurvePreferencesFIPSMode(t *testing.T) {
 	got, err := filterProxyCurvePreferences("4588,29,23,24,4589", true)
 	require.NoError(t, err)
 	assert.Equal(t, "23,24", got)
+}
+
+func TestAddTLSDataDropsNonFIPSApprovedCurvesOnFIPSCluster(t *testing.T) {
+	t.Parallel()
+
+	scheme := runtime.NewScheme()
+	require.NoError(t, configv1.Install(scheme))
+	require.NoError(t, corev1.AddToScheme(scheme))
+
+	installConfig := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "cluster-config-v1",
+			Namespace: "kube-system",
+		},
+		Data: map[string]string{
+			"install-config": "fips: true",
+		},
+	}
+	apiServer := &configv1.APIServer{
+		ObjectMeta: metav1.ObjectMeta{Name: "cluster"},
+		Spec: configv1.APIServerSpec{
+			TLSAdherence: configv1.TLSAdherencePolicyStrictAllComponents,
+			TLSSecurityProfile: &configv1.TLSSecurityProfile{
+				Type: configv1.TLSProfileCustomType,
+				Custom: &configv1.CustomTLSProfile{
+					TLSProfileSpec: configv1.TLSProfileSpec{
+						MinTLSVersion: configv1.VersionTLS12,
+						Ciphers:       []string{"ECDHE-RSA-AES128-GCM-SHA256"},
+						Groups: []configv1.TLSGroup{
+							configv1.TLSGroupX25519,
+							configv1.TLSGroupSecP256r1,
+						},
+					},
+				},
+			},
+		},
+	}
+	cli := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(installConfig, apiServer).
+		Build()
+
+	templateData := map[string]any{}
+	require.NoError(t, addTLSData(context.Background(), cli, templateData))
+	assert.Equal(t, "23", templateData["TLSCurvePreferences"])
+}
+
+func TestClusterFIPSEnabled(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		installConfig string
+		want          bool
+	}{
+		{name: "FIPS enabled", installConfig: "fips: true", want: true},
+		{name: "FIPS disabled", installConfig: "fips: false", want: false},
+		{name: "FIPS key missing", installConfig: "apiVersion: v1", want: false},
+		{name: "install config missing", installConfig: "", want: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			scheme := runtime.NewScheme()
+			require.NoError(t, corev1.AddToScheme(scheme))
+			configMap := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "cluster-config-v1",
+					Namespace: "kube-system",
+				},
+				Data: map[string]string{"install-config": test.installConfig},
+			}
+			cli := fake.NewClientBuilder().WithScheme(scheme).WithObjects(configMap).Build()
+
+			got, err := clusterFIPSEnabled(context.Background(), cli)
+			require.NoError(t, err)
+			assert.Equal(t, test.want, got)
+		})
+	}
 }
 
 func TestValidateExporters_ValidOTLP(t *testing.T) {
