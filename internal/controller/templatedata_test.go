@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -25,9 +26,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	k8serr "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
 func rawExt(yaml string) runtime.RawExtension {
@@ -258,40 +263,77 @@ func TestAddTLSDataDropsNonFIPSApprovedCurvesOnFIPSCluster(t *testing.T) {
 	assert.Equal(t, "23", templateData["TLSCurvePreferences"])
 }
 
-func TestClusterFIPSEnabled(t *testing.T) {
+func TestAddTLSDataDefaultsToFIPSDisabledWhenClusterConfigIsMalformed(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name          string
-		installConfig string
-		want          bool
-	}{
-		{name: "FIPS enabled", installConfig: "fips: true", want: true},
-		{name: "FIPS disabled", installConfig: "fips: false", want: false},
-		{name: "FIPS key missing", installConfig: "apiVersion: v1", want: false},
-		{name: "install config missing", installConfig: "", want: false},
+	scheme := runtime.NewScheme()
+	require.NoError(t, configv1.Install(scheme))
+	require.NoError(t, corev1.AddToScheme(scheme))
+
+	installConfig := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "cluster-config-v1",
+			Namespace: "kube-system",
+		},
+		Data: map[string]string{"install-config": "{ invalid"},
 	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-
-			scheme := runtime.NewScheme()
-			require.NoError(t, corev1.AddToScheme(scheme))
-			configMap := &corev1.ConfigMap{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "cluster-config-v1",
-					Namespace: "kube-system",
+	apiServer := &configv1.APIServer{
+		ObjectMeta: metav1.ObjectMeta{Name: "cluster"},
+		Spec: configv1.APIServerSpec{
+			TLSAdherence: configv1.TLSAdherencePolicyStrictAllComponents,
+			TLSSecurityProfile: &configv1.TLSSecurityProfile{
+				Type: configv1.TLSProfileCustomType,
+				Custom: &configv1.CustomTLSProfile{
+					TLSProfileSpec: configv1.TLSProfileSpec{
+						MinTLSVersion: configv1.VersionTLS12,
+						Ciphers:       []string{"ECDHE-RSA-AES128-GCM-SHA256"},
+						Groups: []configv1.TLSGroup{
+							configv1.TLSGroupX25519,
+							configv1.TLSGroupSecP256r1,
+						},
+					},
 				},
-				Data: map[string]string{"install-config": test.installConfig},
-			}
-			cli := fake.NewClientBuilder().WithScheme(scheme).WithObjects(configMap).Build()
-
-			got, err := clusterFIPSEnabled(context.Background(), cli)
-			require.NoError(t, err)
-			assert.Equal(t, test.want, got)
-		})
+			},
+		},
 	}
+	cli := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(installConfig, apiServer).
+		Build()
+
+	templateData := map[string]any{}
+	require.NoError(t, addTLSData(context.Background(), cli, templateData))
+	assert.Equal(t, "29,23", templateData["TLSCurvePreferences"])
+}
+
+func TestAddTLSDataDistinguishesOperationalResolutionFailure(t *testing.T) {
+	t.Parallel()
+
+	scheme := runtime.NewScheme()
+	require.NoError(t, configv1.Install(scheme))
+	apiServer := &configv1.APIServer{
+		ObjectMeta: metav1.ObjectMeta{Name: "cluster"},
+	}
+	cli := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(apiServer).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if key.Name == "cluster" {
+					return k8serr.NewForbidden(
+						schema.GroupResource{Group: "config.openshift.io", Resource: "apiservers"},
+						key.Name,
+						errors.New("not allowed"),
+					)
+				}
+				return c.Get(ctx, key, obj, opts...)
+			},
+		}).
+		Build()
+
+	err := addTLSData(context.Background(), cli, map[string]any{})
+	require.ErrorIs(t, err, errProxyTLSResolutionFailed)
+	require.NotErrorIs(t, err, errInvalidProxyTLSProfile)
 }
 
 func TestValidateExporters_ValidOTLP(t *testing.T) {
