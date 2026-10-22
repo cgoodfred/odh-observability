@@ -18,7 +18,6 @@ package controller
 
 import (
 	"context"
-	"crypto/fips140"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -37,6 +36,7 @@ import (
 	"github.com/opendatahub-io/odh-platform-utilities/pkg/cluster/olm"
 	"github.com/opendatahub-io/odh-platform-utilities/pkg/cluster/openshift"
 	"gopkg.in/yaml.v3"
+	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	k8serr "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -132,6 +132,10 @@ var fipsApprovedProxyCurveIDs = map[int]struct{}{
 	23: {},
 	24: {},
 	25: {},
+}
+
+type clusterInstallConfig struct {
+	FIPS bool `yaml:"fips"`
 }
 
 // buildTemplateData constructs the data map passed to all YAML templates.
@@ -657,7 +661,16 @@ func addTLSData(ctx context.Context, c client.Client, templateData map[string]an
 		cipherSuites = ""
 	}
 
-	curvePreferences, err = filterProxyCurvePreferences(curvePreferences, fips140.Enabled())
+	fipsEnabled, err := clusterFIPSEnabled(ctx, c)
+	if err != nil {
+		logf.FromContext(ctx).Info(
+			"could not determine cluster FIPS status, defaulting to false",
+			"error", err,
+		)
+		fipsEnabled = false
+	}
+
+	curvePreferences, err = filterProxyCurvePreferences(curvePreferences, fipsEnabled)
 	if err != nil {
 		return fmt.Errorf("%w: %w", errInvalidProxyTLSProfile, err)
 	}
@@ -699,6 +712,28 @@ func filterProxyCurvePreferences(curvePreferences string, fipsEnabled bool) (str
 		return "", fmt.Errorf("TLS profile groups contain no usable proxy curve preferences: %q", curvePreferences)
 	}
 	return strings.Join(usable, ","), nil
+}
+
+func clusterFIPSEnabled(ctx context.Context, c client.Client) (bool, error) {
+	configMap := &corev1.ConfigMap{}
+	if err := c.Get(ctx, client.ObjectKey{
+		Namespace: "kube-system",
+		Name:      "cluster-config-v1",
+	}, configMap); err != nil {
+		return false, err
+	}
+
+	installConfig := configMap.Data["install-config"]
+	if installConfig == "" {
+		return false, nil
+	}
+
+	var parsedInstallConfig clusterInstallConfig
+	if err := yaml.Unmarshal([]byte(installConfig), &parsedInstallConfig); err != nil {
+		return strings.Contains(strings.ToLower(installConfig), "fips: true"), nil
+	}
+
+	return parsedInstallConfig.FIPS, nil
 }
 
 func getEnvOrDefault(envVar, defaultVal string) string {
