@@ -2514,6 +2514,7 @@ func (tc *MonitoringTestCtx) runNetworkingTests(t *testing.T) {
 
 		t.Run("Prometheus restricted resource configuration", tc.ValidatePrometheusRestrictedResourceConfiguration)
 		t.Run("Prometheus secure proxy authentication", tc.ValidatePrometheusSecureProxyAuthentication)
+		t.Run("Monitoring proxy TLS profile rollout", tc.ValidateMonitoringProxyTLSProfileRollout)
 		t.Run("Tenant workload metrics namespace restriction", tc.ValidateTenantWorkloadMetricsNamespaceRestriction)
 		t.Run("OTLP metric identity cannot be spoofed", tc.ValidateOTLPMetricIdentityCannotBeSpoofed)
 		t.Run("Node metrics endpoint deployment", tc.ValidateNodeMetricsEndpointDeployment)
@@ -2687,6 +2688,82 @@ func (tc *MonitoringTestCtx) ValidatePrometheusSecureProxyAuthentication(t *test
 		)),
 		WithCustomErrorMsg("ClusterRoleBinding should reference system:auth-delegator for authentication and authorization"),
 	)
+}
+
+func (tc *MonitoringTestCtx) ValidateMonitoringProxyTLSProfileRollout(t *testing.T) {
+	t.Helper()
+	tc = tc.WithT(t)
+	tc.setupMetrics(t)
+
+	proxyDeployments := []string{
+		"data-science-prometheus-namespace-proxy",
+		"data-science-prometheus-cluster-proxy",
+		ThanosQuerierProxyName,
+	}
+
+	for _, deploymentName := range proxyDeployments {
+		deploymentKey := types.NamespacedName{
+			Name:      deploymentName,
+			Namespace: tc.MonitoringNamespace,
+		}
+		tc.EnsureDeploymentReady(WithMinimalObject(gvk.Deployment, deploymentKey))
+
+		deployment := tc.FetchResource(WithMinimalObject(gvk.Deployment, deploymentKey))
+		containers, found, err := unstructured.NestedSlice(
+			deployment.Object, "spec", "template", "spec", "containers",
+		)
+		require.NoError(t, err)
+		require.True(t, found)
+
+		var proxyContainer map[string]any
+		for _, rawContainer := range containers {
+			container, ok := rawContainer.(map[string]any)
+			require.True(t, ok)
+			if container["name"] == "kube-rbac-proxy" {
+				proxyContainer = container
+				break
+			}
+		}
+		require.NotNil(t, proxyContainer, "kube-rbac-proxy container not found in %s", deploymentName)
+
+		args, found, err := unstructured.NestedStringSlice(proxyContainer, "args")
+		require.NoError(t, err)
+		require.True(t, found)
+
+		minVersion, found := findProxyArg(args, "--tls-min-version=")
+		require.True(t, found, "%s must set --tls-min-version", deploymentName)
+		require.Contains(t, []string{"VersionTLS12", "VersionTLS13"}, minVersion)
+
+		cipherSuites, found := findProxyArg(args, "--tls-cipher-suites=")
+		if minVersion == "VersionTLS13" {
+			require.False(t, found, "TLS 1.3 must not restrict cipher suites in %s", deploymentName)
+		} else {
+			require.True(t, found, "TLS 1.2 must set cipher suites in %s", deploymentName)
+			require.NotEmpty(t, cipherSuites)
+		}
+
+		curvePreferences, found := findProxyArg(args, "--tls-curve-preferences=")
+		if found {
+			require.NotEmpty(t, curvePreferences)
+			for _, rawCurveID := range strings.Split(curvePreferences, ",") {
+				curveID, err := strconv.Atoi(rawCurveID)
+				require.NoError(t, err)
+				require.Contains(t, []int{23, 24, 25, 29, 4588}, curveID)
+			}
+		}
+
+		_, found = findProxyArg(args, "--tls-cipher-suite=")
+		require.False(t, found, "%s uses kube-rbac-proxy and must use the plural cipher flag", deploymentName)
+	}
+}
+
+func findProxyArg(args []string, prefix string) (string, bool) {
+	for _, arg := range args {
+		if strings.HasPrefix(arg, prefix) {
+			return strings.TrimPrefix(arg, prefix), true
+		}
+	}
+	return "", false
 }
 
 func (tc *MonitoringTestCtx) ValidateNodeMetricsEndpointDeployment(t *testing.T) {

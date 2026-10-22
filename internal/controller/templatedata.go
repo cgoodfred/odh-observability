@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"crypto/fips140"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -116,6 +117,22 @@ func (e *missingOperatorsError) Unwrap() error {
 var dns1123LabelRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?$`)
 
 var componentIDRE = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*(?:/[A-Za-z0-9][A-Za-z0-9_-]*)?$`)
+
+var errInvalidProxyTLSProfile = errors.New("invalid APIServer TLS profile for monitoring proxies")
+
+var proxyCurveIDs = map[int]struct{}{
+	23:   {},
+	24:   {},
+	25:   {},
+	29:   {},
+	4588: {},
+}
+
+var fipsApprovedProxyCurveIDs = map[int]struct{}{
+	23: {},
+	24: {},
+	25: {},
+}
 
 // buildTemplateData constructs the data map passed to all YAML templates.
 // persesAPIVersion is pre-resolved by the reconciler (via resolvePersesAPIVersion)
@@ -624,13 +641,64 @@ func getKorrel8rImage() string {
 }
 
 func addTLSData(ctx context.Context, c client.Client, templateData map[string]any) error {
-	minVersion, cipherSuites, err := pkgtls.FromAPIServerWithAdherence(ctx, c, pkgtls.FormatGo)
+	minVersion, cipherSuites, curvePreferences, err := pkgtls.FromAPIServerWithCurvePreferences(
+		ctx,
+		c,
+		pkgtls.FormatGo,
+	)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %w", errInvalidProxyTLSProfile, err)
 	}
+
+	if minVersion != "VersionTLS12" && minVersion != "VersionTLS13" {
+		return fmt.Errorf("%w: unsupported minimum TLS version %q", errInvalidProxyTLSProfile, minVersion)
+	}
+	if minVersion == "VersionTLS13" {
+		cipherSuites = ""
+	}
+
+	curvePreferences, err = filterProxyCurvePreferences(curvePreferences, fips140.Enabled())
+	if err != nil {
+		return fmt.Errorf("%w: %w", errInvalidProxyTLSProfile, err)
+	}
+
 	templateData["TLSMinVersion"] = minVersion
 	templateData["TLSCipherSuites"] = cipherSuites
+	templateData["TLSCurvePreferences"] = curvePreferences
 	return nil
+}
+
+func filterProxyCurvePreferences(curvePreferences string, fipsEnabled bool) (string, error) {
+	if curvePreferences == "" {
+		return "", nil
+	}
+
+	var usable []string
+	seen := make(map[int]struct{})
+	for _, rawCurveID := range strings.Split(curvePreferences, ",") {
+		curveID, err := strconv.Atoi(rawCurveID)
+		if err != nil {
+			return "", fmt.Errorf("invalid numeric TLS curve preference %q: %w", rawCurveID, err)
+		}
+		if _, ok := proxyCurveIDs[curveID]; !ok {
+			continue
+		}
+		if fipsEnabled {
+			if _, ok := fipsApprovedProxyCurveIDs[curveID]; !ok {
+				continue
+			}
+		}
+		if _, ok := seen[curveID]; ok {
+			continue
+		}
+		seen[curveID] = struct{}{}
+		usable = append(usable, rawCurveID)
+	}
+
+	if len(usable) == 0 {
+		return "", fmt.Errorf("TLS profile groups contain no usable proxy curve preferences: %q", curvePreferences)
+	}
+	return strings.Join(usable, ","), nil
 }
 
 func getEnvOrDefault(envVar, defaultVal string) string {
