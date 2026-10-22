@@ -447,8 +447,20 @@ func TestReconcileInvalidTLSProfilePreservesExistingWorkload(t *testing.T) {
 	r := newTestReconciler(t, s, cli)
 
 	_, err := r.reconcile(context.Background(), m)
-	if !errors.Is(err, errInvalidProxyTLSProfile) {
-		t.Fatalf("expected invalid proxy TLS profile error, got: %v", err)
+	if err != nil {
+		t.Fatalf("invalid proxy TLS profile should be a configuration error, got: %v", err)
+	}
+	ready := mustFindCondition(t, m, string(platformcommon.ConditionTypeReady))
+	if ready.Status != metav1.ConditionFalse || ready.Reason != "ConfigurationError" {
+		t.Errorf("Ready: want False/ConfigurationError, got %s/%s", ready.Status, ready.Reason)
+	}
+	provisioning := mustFindCondition(t, m, string(platformcommon.ConditionTypeProvisioningSucceeded))
+	if provisioning.Status != metav1.ConditionFalse || provisioning.Reason != "ConfigurationError" {
+		t.Errorf("ProvisioningSucceeded: want False/ConfigurationError, got %s/%s", provisioning.Status, provisioning.Reason)
+	}
+	degraded := mustFindCondition(t, m, string(platformcommon.ConditionTypeDegraded))
+	if degraded.Status != metav1.ConditionFalse || degraded.Reason != "NotDegraded" {
+		t.Errorf("Degraded: want False/NotDegraded, got %s/%s", degraded.Status, degraded.Reason)
 	}
 
 	var unchanged appsv1.Deployment
@@ -460,6 +472,46 @@ func TestReconcileInvalidTLSProfilePreservesExistingWorkload(t *testing.T) {
 	gotArgs := unchanged.Spec.Template.Spec.Containers[0].Args
 	if len(gotArgs) != 1 || gotArgs[0] != "--tls-min-version="+proxyTLSVersion12 {
 		t.Fatalf("invalid TLS profile must preserve existing workload args, got: %#v", gotArgs)
+	}
+}
+
+func TestReconcileProxyTLSResolutionFailureReturnsError(t *testing.T) {
+	s := newTestScheme(t)
+	m := newMonitoring(v1alpha1.MonitoringInstanceName)
+	m.UID = "monitoring-test-uid"
+	apiServer := &configv1.APIServer{
+		ObjectMeta: metav1.ObjectMeta{Name: "cluster"},
+	}
+
+	cli := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(m, apiServer).
+		WithStatusSubresource(m).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if key.Name == "cluster" {
+					return k8serr.NewForbidden(
+						schema.GroupResource{Group: "config.openshift.io", Resource: "apiservers"},
+						key.Name,
+						errors.New("not allowed"),
+					)
+				}
+				return c.Get(ctx, key, obj, opts...)
+			},
+		}).
+		Build()
+	r := newTestReconciler(t, s, cli)
+
+	_, err := r.reconcile(context.Background(), m)
+	if !errors.Is(err, errProxyTLSResolutionFailed) {
+		t.Fatalf("expected proxy TLS resolution failure, got: %v", err)
+	}
+	ready := mustFindCondition(t, m, string(platformcommon.ConditionTypeReady))
+	if ready.Status != metav1.ConditionFalse || ready.Reason != "ReconcileFailed" {
+		t.Errorf("Ready: want False/ReconcileFailed, got %s/%s", ready.Status, ready.Reason)
+	}
+	degraded := mustFindCondition(t, m, string(platformcommon.ConditionTypeDegraded))
+	if degraded.Status != metav1.ConditionTrue {
+		t.Errorf("Degraded: want True, got %s", degraded.Status)
 	}
 }
 
