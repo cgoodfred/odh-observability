@@ -605,7 +605,7 @@ func addTracesTemplateData(templateData map[string]any, traces *v1alpha1.Traces,
 func addImageURLs(templateData map[string]any) {
 	templateData["KubeRBACProxyImage"] = getEnvOrDefault(
 		"RELATED_IMAGE_ODH_KUBE_RBAC_PROXY_IMAGE",
-		"quay.io/opendatahub/odh-kube-rbac-proxy@sha256:f9cad8a1389ba747f412620525328ccebda1409eab55ea80e4818349b37cbdeb",
+		"quay.io/opendatahub/odh-kube-rbac-proxy@sha256:69c4b767117b9dab040070ca3cd6a4d08f87c197f92c2e9d7637101a39018a7d",
 	)
 	templateData["PromLabelProxyImage"] = getEnvOrDefault(
 		"RELATED_IMAGE_OSE_PROM_LABEL_PROXY_IMAGE",
