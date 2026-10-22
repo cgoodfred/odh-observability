@@ -433,7 +433,7 @@ func TestReconcileInvalidTLSProfilePreservesExistingWorkload(t *testing.T) {
 				Spec: corev1.PodSpec{
 					Containers: []corev1.Container{{
 						Name: "kube-rbac-proxy",
-						Args: []string{"--tls-min-version=VersionTLS12"},
+						Args: []string{"--tls-min-version=" + proxyTLSVersion12},
 					}},
 				},
 			},
@@ -458,7 +458,7 @@ func TestReconcileInvalidTLSProfilePreservesExistingWorkload(t *testing.T) {
 		t.Fatalf("failed to get existing Deployment: %v", err)
 	}
 	gotArgs := unchanged.Spec.Template.Spec.Containers[0].Args
-	if len(gotArgs) != 1 || gotArgs[0] != "--tls-min-version=VersionTLS12" {
+	if len(gotArgs) != 1 || gotArgs[0] != "--tls-min-version="+proxyTLSVersion12 {
 		t.Fatalf("invalid TLS profile must preserve existing workload args, got: %#v", gotArgs)
 	}
 }
@@ -490,7 +490,7 @@ func TestTLSProfileChangeUpdatesProxyDeploymentPodTemplate(t *testing.T) {
 					Containers: []corev1.Container{{
 						Name: "kube-rbac-proxy",
 						Args: []string{
-							"--tls-min-version=VersionTLS12",
+							"--tls-min-version=" + proxyTLSVersion12,
 							"--tls-cipher-suites=TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
 						},
 					}},
@@ -534,7 +534,7 @@ func TestTLSProfileChangeUpdatesProxyDeploymentPodTemplate(t *testing.T) {
 		t.Fatal("upgrading a legacy proxy Deployment must update its resource version")
 	}
 	args := deployment.Spec.Template.Spec.Containers[0].Args
-	if !slices.Contains(args, "--tls-min-version=VersionTLS12") ||
+	if !slices.Contains(args, "--tls-min-version="+proxyTLSVersion12) ||
 		!slices.Contains(args, "--tls-cipher-suites=TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256") ||
 		!slices.Contains(args, "--tls-curve-preferences=29,25") {
 		t.Fatalf("initial proxy args missing TLS settings: %#v", args)
@@ -559,7 +559,7 @@ func TestTLSProfileChangeUpdatesProxyDeploymentPodTemplate(t *testing.T) {
 
 	deployment = deployTLSProfile()
 	args = deployment.Spec.Template.Spec.Containers[0].Args
-	if !slices.Contains(args, "--tls-min-version=VersionTLS13") ||
+	if !slices.Contains(args, "--tls-min-version="+proxyTLSVersion13) ||
 		!slices.Contains(args, "--tls-curve-preferences=23,29") {
 		t.Fatalf("updated proxy args missing TLS settings: %#v", args)
 	}
