@@ -271,12 +271,12 @@ func (r *MonitoringReconciler) reconcile(ctx context.Context, monitoring *v1alph
 	// Build template data.
 	data, err := buildTemplateData(ctx, r.Client, monitoring, persesVersion)
 	if err != nil {
+		if errors.Is(err, errProxyTLSResolutionFailed) {
+			return ctrl.Result{}, err
+		}
 		cm.MarkFalse(string(platformcommon.ConditionTypeProvisioningSucceeded), "ConfigurationError", err.Error())
 		cm.MarkFalse(string(platformcommon.ConditionTypeReady), "ConfigurationError", err.Error())
 		cm.MarkFalse(string(platformcommon.ConditionTypeDegraded), "NotDegraded", "")
-		if errors.Is(err, errProxyTLSResolutionFailed) || errors.Is(err, errInvalidProxyTLSProfile) {
-			return ctrl.Result{}, err
-		}
 		return ctrl.Result{}, nil
 	}
 
