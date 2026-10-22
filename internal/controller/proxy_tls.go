@@ -26,7 +26,6 @@ import (
 	pkgtls "github.com/opendatahub-io/odh-platform-utilities/framework/tls"
 	platformcluster "github.com/opendatahub-io/odh-platform-utilities/pkg/cluster"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	logf "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 const (
@@ -77,11 +76,7 @@ func addTLSData(ctx context.Context, c client.Client, templateData map[string]an
 
 	fipsEnabled, err := platformcluster.IsFipsEnabled(ctx, c)
 	if err != nil {
-		logf.FromContext(ctx).Info(
-			"could not determine cluster FIPS status, defaulting to false",
-			"error", err,
-		)
-		fipsEnabled = false
+		return fmt.Errorf("%w: determining cluster FIPS status: %w", errProxyTLSResolutionFailed, err)
 	}
 
 	curvePreferences, err = filterProxyCurvePreferences(curvePreferences, fipsEnabled)
