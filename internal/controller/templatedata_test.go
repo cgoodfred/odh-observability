@@ -263,7 +263,7 @@ func TestAddTLSDataDropsNonFIPSApprovedCurvesOnFIPSCluster(t *testing.T) {
 	assert.Equal(t, "23", templateData["TLSCurvePreferences"])
 }
 
-func TestAddTLSDataDefaultsToFIPSDisabledWhenClusterConfigIsMalformed(t *testing.T) {
+func TestAddTLSDataFailsClosedWhenClusterConfigIsMalformed(t *testing.T) {
 	t.Parallel()
 
 	scheme := runtime.NewScheme()
@@ -302,8 +302,10 @@ func TestAddTLSDataDefaultsToFIPSDisabledWhenClusterConfigIsMalformed(t *testing
 		Build()
 
 	templateData := map[string]any{}
-	require.NoError(t, addTLSData(context.Background(), cli, templateData))
-	assert.Equal(t, "29,23", templateData["TLSCurvePreferences"])
+	err := addTLSData(context.Background(), cli, templateData)
+	require.ErrorIs(t, err, errProxyTLSResolutionFailed)
+	require.NotErrorIs(t, err, errInvalidProxyTLSProfile)
+	assert.Empty(t, templateData)
 }
 
 func TestAddTLSDataDistinguishesOperationalResolutionFailure(t *testing.T) {
