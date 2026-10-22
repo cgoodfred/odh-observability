@@ -17,10 +17,13 @@ import (
 
 	gTypes "github.com/onsi/gomega/types"
 	common "github.com/opendatahub-io/odh-platform-utilities/api/common"
+	configv1 "github.com/openshift/api/config/v1"
+	ocpcrypto "github.com/openshift/library-go/pkg/crypto"
 	"github.com/stretchr/testify/require"
 	authenticationv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
 	k8serr "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -33,6 +36,7 @@ import (
 	"github.com/opendatahub-io/odh-observability/internal/controller/conditions"
 	"github.com/opendatahub-io/odh-observability/internal/controller/gvk"
 	jq "github.com/opendatahub-io/odh-observability/tests/e2e/matchers/jq"
+	"gopkg.in/yaml.v3"
 
 	. "github.com/onsi/gomega" //nolint:revive // dot import is idiomatic for gomega
 )
@@ -2741,31 +2745,182 @@ func (tc *MonitoringTestCtx) ValidateMonitoringProxyTLSProfileRollout(t *testing
 		require.NoError(t, err)
 		require.True(t, found)
 
+		expected := tc.expectedKubeRBACProxyTLSArgs(t)
+
 		minVersion, found := findProxyArg(args, "--tls-min-version=")
 		require.True(t, found, "%s must set --tls-min-version", deploymentName)
-		require.Contains(t, []string{"VersionTLS12", "VersionTLS13"}, minVersion)
+		require.Equal(t, expected.minVersion, minVersion)
 
 		cipherSuites, found := findProxyArg(args, "--tls-cipher-suites=")
-		if minVersion == "VersionTLS13" {
+		if expected.cipherSuites == "" {
 			require.False(t, found, "TLS 1.3 must not restrict cipher suites in %s", deploymentName)
 		} else {
 			require.True(t, found, "TLS 1.2 must set cipher suites in %s", deploymentName)
-			require.NotEmpty(t, cipherSuites)
+			require.Equal(t, expected.cipherSuites, cipherSuites)
 		}
 
 		curvePreferences, found := findProxyArg(args, "--tls-curve-preferences=")
-		if found {
-			require.NotEmpty(t, curvePreferences)
-			for _, rawCurveID := range strings.Split(curvePreferences, ",") {
-				curveID, err := strconv.Atoi(rawCurveID)
-				require.NoError(t, err)
-				require.Contains(t, []int{23, 24, 25, 29, 4588}, curveID)
-			}
+		if expected.curvePreferences == "" {
+			require.False(t, found, "%s must omit curve preferences when no usable groups are configured", deploymentName)
+		} else {
+			require.True(t, found, "%s must set curve preferences", deploymentName)
+			require.Equal(t, expected.curvePreferences, curvePreferences)
 		}
 
 		_, found = findProxyArg(args, "--tls-cipher-suite=")
 		require.False(t, found, "%s uses kube-rbac-proxy and must use the plural cipher flag", deploymentName)
 	}
+}
+
+type expectedProxyTLSArgs struct {
+	minVersion       string
+	cipherSuites     string
+	curvePreferences string
+}
+
+func (tc *MonitoringTestCtx) expectedKubeRBACProxyTLSArgs(t *testing.T) expectedProxyTLSArgs {
+	t.Helper()
+
+	profile := tc.expectedClusterTLSProfile(t)
+	spec := expectedProxyTLSProfileSpec(t, profile)
+	minVersion := expectedProxyTLSMinVersion(t, spec.MinTLSVersion)
+
+	cipherSuites := ""
+	if minVersion == "VersionTLS12" {
+		cipherSuites = expectedProxyTLSCipherSuites(spec.Ciphers)
+	}
+
+	return expectedProxyTLSArgs{
+		minVersion:       minVersion,
+		cipherSuites:     cipherSuites,
+		curvePreferences: tc.expectedProxyTLSCurvePreferences(t, spec.Groups),
+	}
+}
+
+func (tc *MonitoringTestCtx) expectedClusterTLSProfile(t *testing.T) *configv1.TLSSecurityProfile {
+	t.Helper()
+
+	apiServer := &configv1.APIServer{}
+	err := tc.Client().Get(tc.Context(), types.NamespacedName{Name: "cluster"}, apiServer)
+	if k8serr.IsNotFound(err) || meta.IsNoMatchError(err) {
+		return nil
+	}
+	require.NoError(t, err, "failed to get cluster APIServer configuration")
+
+	switch apiServer.Spec.TLSAdherence {
+	case configv1.TLSAdherencePolicyNoOpinion, configv1.TLSAdherencePolicyLegacyAdheringComponentsOnly:
+		return nil
+	default:
+		return apiServer.Spec.TLSSecurityProfile
+	}
+}
+
+func expectedProxyTLSProfileSpec(t *testing.T, profile *configv1.TLSSecurityProfile) configv1.TLSProfileSpec {
+	t.Helper()
+
+	if profile == nil || profile.Type == "" {
+		return *configv1.TLSProfiles[configv1.TLSProfileIntermediateType]
+	}
+	if profile.Type == configv1.TLSProfileCustomType {
+		require.NotNil(t, profile.Custom, "strict custom TLS profile must define a specification")
+		return profile.Custom.TLSProfileSpec
+	}
+
+	spec, ok := configv1.TLSProfiles[profile.Type]
+	require.True(t, ok, "unsupported strict TLS profile type %q", profile.Type)
+	return *spec
+}
+
+func expectedProxyTLSMinVersion(t *testing.T, minVersion configv1.TLSProtocolVersion) string {
+	t.Helper()
+
+	switch minVersion {
+	case configv1.VersionTLS12:
+		return "VersionTLS12"
+	case configv1.VersionTLS13:
+		return "VersionTLS13"
+	default:
+		t.Fatalf("kube-rbac-proxy cannot represent minimum TLS version %q", minVersion)
+		return ""
+	}
+}
+
+func expectedProxyTLSCipherSuites(ciphers []string) string {
+	ianaCiphers := ocpcrypto.OpenSSLToIANACipherSuites(ciphers)
+	filtered := make([]string, 0, len(ianaCiphers))
+	for _, cipher := range ianaCiphers {
+		code, err := ocpcrypto.CipherSuite(cipher)
+		if err != nil || code&0xff00 == 0x1300 {
+			continue
+		}
+		filtered = append(filtered, cipher)
+	}
+	if len(filtered) == 0 {
+		filtered = ocpcrypto.OpenSSLToIANACipherSuites(
+			configv1.TLSProfiles[configv1.TLSProfileIntermediateType].Ciphers,
+		)
+	}
+	return strings.Join(filtered, ",")
+}
+
+func (tc *MonitoringTestCtx) expectedProxyTLSCurvePreferences(t *testing.T, groups []configv1.TLSGroup) string {
+	t.Helper()
+
+	if len(groups) == 0 {
+		return ""
+	}
+
+	curves, _ := ocpcrypto.TLSGroupsToCurveIDs(groups)
+	fipsEnabled := tc.expectedClusterFIPSEnabled(t)
+	allowedCurves := map[int]struct{}{
+		23: {}, 24: {}, 25: {}, 29: {}, 4588: {},
+	}
+	if fipsEnabled {
+		allowedCurves = map[int]struct{}{23: {}, 24: {}, 25: {}}
+	}
+
+	seen := make(map[int]struct{}, len(curves))
+	curveIDs := make([]string, 0, len(curves))
+	for _, curve := range curves {
+		if _, ok := allowedCurves[int(curve)]; !ok {
+			continue
+		}
+		if _, ok := seen[int(curve)]; ok {
+			continue
+		}
+		seen[int(curve)] = struct{}{}
+		curveIDs = append(curveIDs, strconv.Itoa(int(curve)))
+	}
+
+	require.NotEmpty(t, curveIDs, "strict TLS profile groups contain no kube-rbac-proxy-supported curves")
+	return strings.Join(curveIDs, ",")
+}
+
+func (tc *MonitoringTestCtx) expectedClusterFIPSEnabled(t *testing.T) bool {
+	t.Helper()
+
+	configMap := &corev1.ConfigMap{}
+	err := tc.Client().Get(tc.Context(), types.NamespacedName{
+		Namespace: "kube-system",
+		Name:      "cluster-config-v1",
+	}, configMap)
+	if k8serr.IsNotFound(err) {
+		return false
+	}
+	require.NoError(t, err, "failed to get cluster install configuration")
+
+	installConfig := configMap.Data["install-config"]
+	if installConfig == "" {
+		return false
+	}
+
+	var parsedInstallConfig struct {
+		FIPS bool `yaml:"fips"`
+	}
+	if err := yaml.Unmarshal([]byte(installConfig), &parsedInstallConfig); err != nil {
+		return strings.Contains(strings.ToLower(installConfig), "fips: true")
+	}
+	return parsedInstallConfig.FIPS
 }
 
 func findProxyArg(args []string, prefix string) (string, bool) {
