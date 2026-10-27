@@ -1295,7 +1295,7 @@ func (tc *MonitoringTestCtx) assertThanosPromQLResponds(t *testing.T, query stri
 		"Component=Thanos Assertion=promql-response: Route %s has no ingress host", ThanosQuerierRouteName)
 
 	token := authorizedThanosProbeToken(t, tc,
-		"thanos-baseline-"+strconv.FormatInt(time.Now().UnixNano(), 10))
+		"thanos-baseline-"+strconv.FormatInt(time.Now().UnixNano(), 10), true)
 
 	endpoint := url.URL{Scheme: "https", Host: host, Path: "/api/v1/query"}
 	parameters := endpoint.Query()

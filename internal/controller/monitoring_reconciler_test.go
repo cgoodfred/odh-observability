@@ -28,6 +28,7 @@ import (
 	configv1 "github.com/openshift/api/config/v1"
 	routev1 "github.com/openshift/api/route/v1"
 	appsv1 "k8s.io/api/apps/v1"
+	authorizationv1 "k8s.io/api/authorization/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
@@ -148,6 +149,39 @@ func TestPreparePrometheusWebTLSCA(t *testing.T) {
 	}
 }
 
+func TestPreparePrometheusWebTLSCAUsesConfiguredMonitoringNamespace(t *testing.T) {
+	t.Setenv("MONITORING_NAMESPACE", "custom-monitoring")
+	s := newTestScheme(t)
+	m := newMonitoring(v1alpha1.MonitoringInstanceName)
+	m.Spec.Namespace = ""
+	m.Spec.Metrics = &v1alpha1.Metrics{Storage: &v1alpha1.MetricsStorage{}}
+
+	ca := &unstructured.Unstructured{}
+	ca.SetGroupVersionKind(controllergvk.ConfigMap)
+	ca.SetName(prometheusWebTLSCAConfigMapName)
+	ca.SetNamespace("custom-monitoring")
+	stack := &unstructured.Unstructured{}
+	stack.SetGroupVersionKind(controllergvk.MonitoringStack)
+	stack.SetName("data-science-monitoringstack")
+	stack.SetNamespace("custom-monitoring")
+	desired := []unstructured.Unstructured{*ca, *stack}
+
+	cli := fake.NewClientBuilder().WithScheme(s).Build()
+	r := newTestReconciler(t, s, cli)
+	ready, err := r.preparePrometheusWebTLSCA(context.Background(), m, desired)
+	if err != nil || ready {
+		t.Fatalf("expected CA to be pending, got ready=%v error=%v", ready, err)
+	}
+
+	var created corev1.ConfigMap
+	if err := cli.Get(context.Background(), client.ObjectKey{
+		Namespace: "custom-monitoring",
+		Name:      prometheusWebTLSCAConfigMapName,
+	}, &created); err != nil {
+		t.Fatalf("CA ConfigMap was not applied in the configured namespace: %v", err)
+	}
+}
+
 func registerOperatorConditionTypes(s *runtime.Scheme) {
 	s.AddKnownTypeWithName(schema.GroupVersionKind{
 		Group: "operators.coreos.com", Version: "v2", Kind: "OperatorCondition",
@@ -189,6 +223,18 @@ func operatorConditionListForbidden() interceptor.Funcs {
 				return k8serr.NewForbidden(schema.GroupResource{Resource: "operatorconditions"}, "", errors.New("not allowed"))
 			}
 			return c.List(ctx, list, opts...)
+		},
+	}
+}
+
+func selfSubjectRulesReviewInterceptor(reviewErr error) interceptor.Funcs {
+	return interceptor.Funcs{
+		Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if _, ok := obj.(*authorizationv1.SelfSubjectRulesReview); ok {
+				// An empty rule set models a clean namespace with no collectable resources.
+				return reviewErr
+			}
+			return c.Create(ctx, obj, opts...)
 		},
 	}
 }
@@ -264,6 +310,18 @@ func TestValidateMonitoringNamespace(t *testing.T) {
 		}
 	})
 
+	t.Run("empty namespace uses the configured Helm namespace", func(t *testing.T) {
+		emptyNamespace := m.DeepCopy()
+		emptyNamespace.Spec.Namespace = ""
+		t.Setenv("MONITORING_NAMESPACE", "redhat-ods-monitoring")
+		if got := monitoringNamespace(emptyNamespace); got != "redhat-ods-monitoring" {
+			t.Fatalf("monitoringNamespace: want redhat-ods-monitoring, got %q", got)
+		}
+		if err := validateMonitoringNamespace(emptyNamespace); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
 	t.Run("mismatched configuration is rejected", func(t *testing.T) {
 		t.Setenv("MONITORING_NAMESPACE", "redhat-ods-monitoring")
 		if err := validateMonitoringNamespace(m); err == nil {
@@ -279,7 +337,8 @@ func TestReconcile_Removed(t *testing.T) {
 	m := newMonitoring(v1alpha1.MonitoringInstanceName)
 	m.Spec.ManagementState = platformcommon.Removed
 
-	r := newTestReconciler(t, s, fake.NewClientBuilder().WithScheme(s).WithObjects(m).WithStatusSubresource(m).Build())
+	r := newTestReconciler(t, s, fake.NewClientBuilder().WithScheme(s).WithObjects(m).WithStatusSubresource(m).
+		WithInterceptorFuncs(selfSubjectRulesReviewInterceptor(nil)).Build())
 
 	_, err := r.reconcile(context.Background(), m)
 	if err != nil {
@@ -305,6 +364,21 @@ func TestReconcile_Removed(t *testing.T) {
 	}
 	if dependenciesReady != string(metav1.ConditionFalse) {
 		t.Errorf("MonitoringDependenciesReady: want False, got %q", dependenciesReady)
+	}
+}
+
+func TestReconcile_Removed_CleanupError(t *testing.T) {
+	s := newTestScheme(t)
+	m := newMonitoring(v1alpha1.MonitoringInstanceName)
+	m.Spec.ManagementState = platformcommon.Removed
+	cleanupErr := errors.New("rule review failed")
+
+	r := newTestReconciler(t, s, fake.NewClientBuilder().WithScheme(s).WithObjects(m).WithStatusSubresource(m).
+		WithInterceptorFuncs(selfSubjectRulesReviewInterceptor(cleanupErr)).Build())
+
+	_, err := r.reconcile(context.Background(), m)
+	if !errors.Is(err, cleanupErr) {
+		t.Fatalf("expected cleanup error to be returned for retry, got %v", err)
 	}
 }
 
@@ -696,7 +770,8 @@ func TestReconcile_NothingConfigured(t *testing.T) {
 	m := newMonitoring(v1alpha1.MonitoringInstanceName)
 	// No Metrics/Traces configured: no operator precondition checks triggered.
 
-	r := newTestReconciler(t, s, fake.NewClientBuilder().WithScheme(s).WithObjects(m).WithStatusSubresource(m).Build())
+	r := newTestReconciler(t, s, fake.NewClientBuilder().WithScheme(s).WithObjects(m).WithStatusSubresource(m).
+		WithInterceptorFuncs(selfSubjectRulesReviewInterceptor(nil)).Build())
 
 	_, err := r.reconcile(context.Background(), m)
 	if err != nil {
@@ -749,7 +824,8 @@ func TestReconcile_CleansOperatorNetworkPoliciesInEffectiveNamespace(t *testing.
 			},
 		},
 	}
-	cli := fake.NewClientBuilder().WithScheme(s).WithObjects(m, stalePolicy).WithStatusSubresource(m).Build()
+	cli := fake.NewClientBuilder().WithScheme(s).WithObjects(m, stalePolicy).WithStatusSubresource(m).
+		WithInterceptorFuncs(selfSubjectRulesReviewInterceptor(nil)).Build()
 	r := newTestReconciler(t, s, cli)
 
 	if _, err := r.reconcile(context.Background(), m); err != nil {
@@ -758,6 +834,19 @@ func TestReconcile_CleansOperatorNetworkPoliciesInEffectiveNamespace(t *testing.
 
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(stalePolicy), &networkingv1.NetworkPolicy{}); !k8serr.IsNotFound(err) {
 		t.Fatalf("expected generated policy in effective namespace to be deleted, got %v", err)
+	}
+}
+
+func TestReconcile_GarbageCollectionError(t *testing.T) {
+	s := newTestScheme(t)
+	m := newMonitoring(v1alpha1.MonitoringInstanceName)
+	cleanupErr := errors.New("rule review failed")
+	r := newTestReconciler(t, s, fake.NewClientBuilder().WithScheme(s).WithObjects(m).WithStatusSubresource(m).
+		WithInterceptorFuncs(selfSubjectRulesReviewInterceptor(cleanupErr)).Build())
+
+	_, err := r.reconcile(context.Background(), m)
+	if !errors.Is(err, cleanupErr) {
+		t.Fatalf("expected garbage collection error to be returned for retry, got %v", err)
 	}
 }
 
@@ -841,7 +930,8 @@ func TestReconcile_ReleasesPopulated(t *testing.T) {
 
 	m := newMonitoring(v1alpha1.MonitoringInstanceName)
 
-	r := newTestReconciler(t, s, fake.NewClientBuilder().WithScheme(s).WithObjects(m).WithStatusSubresource(m).Build())
+	r := newTestReconciler(t, s, fake.NewClientBuilder().WithScheme(s).WithObjects(m).WithStatusSubresource(m).
+		WithInterceptorFuncs(selfSubjectRulesReviewInterceptor(nil)).Build())
 
 	_, err := r.reconcile(context.Background(), m)
 	if err != nil {
@@ -885,7 +975,8 @@ func TestReconcile_PlatformVersionStampedIntoStatus(t *testing.T) {
 
 	r := newTestReconciler(t, s, fake.NewClientBuilder().WithScheme(s).
 		WithObjects(m, platformConfigMap(ns, version)).
-		WithStatusSubresource(m).Build())
+		WithStatusSubresource(m).
+		WithInterceptorFuncs(selfSubjectRulesReviewInterceptor(nil)).Build())
 
 	_, err := r.reconcile(context.Background(), m)
 	if err != nil {
@@ -1080,7 +1171,7 @@ func TestGarbageCollectionOwnershipAndNamespaceScope(t *testing.T) {
 	staleTargetBinding := ownedGarbageCollectionTestObject(controllergvk.RoleBinding, "team-a", targetAllocatorSecretRBACName, monitoring.UID)
 	otherMonitoringRole := ownedGarbageCollectionTestObject(controllergvk.Role, "team-a", targetAllocatorSecretRBACName, types.UID("other-monitoring"))
 	staleMonitoringConfigMap := ownedGarbageCollectionTestObject(schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}, monitoring.Spec.Namespace, "stale-config", monitoring.UID)
-	clusterRole := ownedGarbageCollectionTestObject(controllergvk.ClusterRole, "", "stale-cluster-role", monitoring.UID)
+	clusterRole := ownedGarbageCollectionTestObject(controllergvk.ClusterRole, "", "data-science-metrics-view", monitoring.UID)
 
 	desiredTargetRole := resourceKey{
 		gvk:       staleTargetRole.GroupVersionKind(),
@@ -1346,7 +1437,8 @@ func TestReconcile_ObservedGenerationSet(t *testing.T) {
 	m := newMonitoring(v1alpha1.MonitoringInstanceName)
 	m.Generation = 7
 
-	r := newTestReconciler(t, s, fake.NewClientBuilder().WithScheme(s).WithObjects(m).WithStatusSubresource(m).Build())
+	r := newTestReconciler(t, s, fake.NewClientBuilder().WithScheme(s).WithObjects(m).WithStatusSubresource(m).
+		WithInterceptorFuncs(selfSubjectRulesReviewInterceptor(nil)).Build())
 
 	_, err := r.reconcile(context.Background(), m)
 	if err != nil {

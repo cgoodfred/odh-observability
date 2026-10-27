@@ -266,7 +266,7 @@ This label is what makes the MonitoringStack's Prometheus instance discover and 
 
 ### Admission Probe
 
-Because the webhook uses `failurePolicy: Ignore`, an outage admits monitors without the scrape label and no client sees an error. The operator runs an in-process probe every 5 minutes that writes a canary PodMonitor and checks that the webhook labeled it; the result is exported as `webhook_admission_probe_*` metrics and drives the `MonitoringWebhookAdmissionPathDown` alert.
+The webhook uses `failurePolicy: Fail` by default, so an outage rejects admission instead of allowing monitors through without the scrape label. Deployments that prioritize availability during operator restarts can set the Helm value to `Ignore`. The operator runs an in-process probe every 5 minutes that writes a canary PodMonitor and checks that the webhook labeled it; the result is exported as `webhook_admission_probe_*` metrics and drives the `MonitoringWebhookAdmissionPathDown` alert.
 
 The canary lives in a dedicated namespace (`webhook.probe.namespace`, default `<fullname>-webhook-probe`) that the Helm chart creates with `monitoring.opendatahub.io/scrape=true`, so the webhook `namespaceSelector` matches it without opting real monitors in the monitoring namespace into scraping. The operator reads the namespace from `WEBHOOK_PROBE_NAMESPACE`; the probe is disabled when it is unset and counts a failure when the namespace lacks the label.
 
@@ -315,7 +315,7 @@ Prometheus (port 9090)
 
 **Authentication**: kube-rbac-proxy validates bearer tokens via Kubernetes TokenReview API.
 
-**Authorization**: SubjectAccessReview checks that the user has permissions for `metrics.k8s.io/pods` in the requested namespace. The verb is derived from the HTTP method (GET -> `get`, POST -> `create`).
+**Authorization**: SubjectAccessReview checks that the user can `get` `metrics.k8s.io/pods` in the requested namespace. The proxy uses this read permission for both GET and read-only Prometheus POST queries. The old aggregated `data-science-metrics-view` ClusterRole is no longer rendered and is eligible for removal by the monitoring resource garbage collector on upgrade.
 
 **Query isolation**: prom-label-proxy rewrites PromQL queries to inject `{namespace="<value>"}`, ensuring users only see metrics from namespaces they are authorized for, regardless of how they craft their queries. Its single-value regex mode rejects duplicate namespace values supplied across URL and POST form parameters instead of widening the enforced matcher.
 
