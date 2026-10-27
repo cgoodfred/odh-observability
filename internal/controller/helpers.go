@@ -200,7 +200,7 @@ func syncPrometheusWebTLSCA(ctx context.Context, c client.Client, monitoring *v1
 		return true, nil
 	}
 
-	namespace := monitoring.Spec.Namespace
+	namespace := monitoringNamespace(monitoring)
 
 	var configMap unstructured.Unstructured
 	configMap.SetAPIVersion("v1")
@@ -279,7 +279,7 @@ func syncThanosQuerierRouteDestinationCA(ctx context.Context, c client.Client, m
 		return nil
 	}
 
-	namespace := monitoring.Spec.Namespace
+	namespace := monitoringNamespace(monitoring)
 	configMap := &unstructured.Unstructured{}
 	configMap.SetAPIVersion("v1")
 	configMap.SetKind("ConfigMap")
@@ -330,7 +330,7 @@ func syncStatusURL(ctx context.Context, c client.Client, monitoring *v1alpha1.Mo
 
 	route := &routev1.Route{}
 	if err := c.Get(ctx, client.ObjectKey{
-		Namespace: monitoring.Spec.Namespace,
+		Namespace: monitoringNamespace(monitoring),
 		Name:      thanosQuerierRouteName,
 	}, route); err != nil {
 		monitoring.Status.URL = ""

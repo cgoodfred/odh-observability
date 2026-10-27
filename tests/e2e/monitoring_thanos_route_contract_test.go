@@ -150,7 +150,7 @@ func (tc *MonitoringTestCtx) ValidateThanosQuerierRouteNamespaceIsolation(t *tes
 	}
 	registerProbeCleanup(metricsRoleBinding)
 
-	authorizedToken := authorizedThanosProbeToken(t, tc, authorizedName)
+	authorizedToken := authorizedThanosProbeToken(t, tc, authorizedName, false)
 	restrictedToken := serviceAccountToken(t, tc, restrictedName)
 
 	anonymous := waitForAnonymousThanosRoute(t, rootCAs, routeHost, tc.MonitoringNamespace)
@@ -391,7 +391,7 @@ func clusterIngressCAPool(t *testing.T, tc *MonitoringTestCtx) *x509.CertPool {
 
 // authorizedThanosProbeToken creates a namespace-scoped identity for Route
 // queries, independent of how the test runner authenticates to Kubernetes.
-func authorizedThanosProbeToken(t *testing.T, tc *MonitoringTestCtx, name string) string {
+func authorizedThanosProbeToken(t *testing.T, tc *MonitoringTestCtx, name string, bindView bool) string {
 	t.Helper()
 	serviceAccount := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{
 		Name: name, Namespace: tc.MonitoringNamespace,
@@ -405,23 +405,25 @@ func authorizedThanosProbeToken(t *testing.T, tc *MonitoringTestCtx, name string
 		}
 	})
 
-	roleBinding := &rbacv1.RoleBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: tc.MonitoringNamespace},
-		RoleRef: rbacv1.RoleRef{
-			APIGroup: "rbac.authorization.k8s.io", Kind: "ClusterRole", Name: "view",
-		},
-		Subjects: []rbacv1.Subject{{
-			Kind: "ServiceAccount", Name: name, Namespace: tc.MonitoringNamespace,
-		}},
-	}
-	if err := tc.Client().Create(tc.Context(), roleBinding); err != nil {
-		t.Fatalf("failed to create authorized probe RoleBinding: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := tc.Client().Delete(tc.Context(), roleBinding); err != nil && !k8serr.IsNotFound(err) {
-			t.Logf("failed to clean up authorized probe RoleBinding %s: %v", name, err)
+	if bindView {
+		roleBinding := &rbacv1.RoleBinding{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: tc.MonitoringNamespace},
+			RoleRef: rbacv1.RoleRef{
+				APIGroup: "rbac.authorization.k8s.io", Kind: "ClusterRole", Name: "view",
+			},
+			Subjects: []rbacv1.Subject{{
+				Kind: "ServiceAccount", Name: name, Namespace: tc.MonitoringNamespace,
+			}},
 		}
-	})
+		if err := tc.Client().Create(tc.Context(), roleBinding); err != nil {
+			t.Fatalf("failed to create authorized probe RoleBinding: %v", err)
+		}
+		t.Cleanup(func() {
+			if err := tc.Client().Delete(tc.Context(), roleBinding); err != nil && !k8serr.IsNotFound(err) {
+				t.Logf("failed to clean up authorized probe RoleBinding %s: %v", name, err)
+			}
+		})
+	}
 	return serviceAccountToken(t, tc, name)
 }
 

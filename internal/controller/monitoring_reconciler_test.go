@@ -148,6 +148,39 @@ func TestPreparePrometheusWebTLSCA(t *testing.T) {
 	}
 }
 
+func TestPreparePrometheusWebTLSCAUsesConfiguredMonitoringNamespace(t *testing.T) {
+	t.Setenv("MONITORING_NAMESPACE", "custom-monitoring")
+	s := newTestScheme(t)
+	m := newMonitoring(v1alpha1.MonitoringInstanceName)
+	m.Spec.Namespace = ""
+	m.Spec.Metrics = &v1alpha1.Metrics{Storage: &v1alpha1.MetricsStorage{}}
+
+	ca := &unstructured.Unstructured{}
+	ca.SetGroupVersionKind(controllergvk.ConfigMap)
+	ca.SetName(prometheusWebTLSCAConfigMapName)
+	ca.SetNamespace("custom-monitoring")
+	stack := &unstructured.Unstructured{}
+	stack.SetGroupVersionKind(controllergvk.MonitoringStack)
+	stack.SetName("data-science-monitoringstack")
+	stack.SetNamespace("custom-monitoring")
+	desired := []unstructured.Unstructured{*ca, *stack}
+
+	cli := fake.NewClientBuilder().WithScheme(s).Build()
+	r := newTestReconciler(t, s, cli)
+	ready, err := r.preparePrometheusWebTLSCA(context.Background(), m, desired)
+	if err != nil || ready {
+		t.Fatalf("expected CA to be pending, got ready=%v error=%v", ready, err)
+	}
+
+	var created corev1.ConfigMap
+	if err := cli.Get(context.Background(), client.ObjectKey{
+		Namespace: "custom-monitoring",
+		Name:      prometheusWebTLSCAConfigMapName,
+	}, &created); err != nil {
+		t.Fatalf("CA ConfigMap was not applied in the configured namespace: %v", err)
+	}
+}
+
 func registerOperatorConditionTypes(s *runtime.Scheme) {
 	s.AddKnownTypeWithName(schema.GroupVersionKind{
 		Group: "operators.coreos.com", Version: "v2", Kind: "OperatorCondition",

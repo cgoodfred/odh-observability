@@ -476,12 +476,13 @@ func (r *MonitoringReconciler) preparePrometheusWebTLSCA(
 ) (bool, error) {
 	stackFound := false
 	var caConfigMap *unstructured.Unstructured
+	namespace := monitoringNamespace(monitoring)
 	for i := range desired {
 		obj := &desired[i]
-		if obj.GroupVersionKind() == controllergvk.MonitoringStack && obj.GetNamespace() == monitoring.Spec.Namespace {
+		if obj.GroupVersionKind() == controllergvk.MonitoringStack && obj.GetNamespace() == namespace {
 			stackFound = true
 		}
-		if obj.GroupVersionKind() == controllergvk.ConfigMap && obj.GetNamespace() == monitoring.Spec.Namespace && obj.GetName() == prometheusWebTLSCAConfigMapName {
+		if obj.GroupVersionKind() == controllergvk.ConfigMap && obj.GetNamespace() == namespace && obj.GetName() == prometheusWebTLSCAConfigMapName {
 			caConfigMap = obj
 		}
 	}
