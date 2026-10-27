@@ -818,6 +818,9 @@ func deployWebhookInfrastructure(
 
 func monitoringNamespace(monitoring *v1alpha1.Monitoring) string {
 	if monitoring.Spec.Namespace == "" {
+		if configured := os.Getenv("MONITORING_NAMESPACE"); configured != "" {
+			return configured
+		}
 		return defaultMonitoringNamespace
 	}
 	return monitoring.Spec.Namespace

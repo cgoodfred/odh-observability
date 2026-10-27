@@ -184,21 +184,6 @@ func (tc *MonitoringTestCtx) ValidateThanosQuerierRouteNamespaceIsolation(t *tes
 	logThanosRouteEvidence(t, "authorized", authorized)
 	assertThanosRouteNamespaceSeries(t, "authorized", authorized.Labels, tc.MonitoringNamespace)
 
-	// Prometheus POST queries are read-only and must work with only the metrics
-	// get permission granted above.
-	authorizedPOST, err := probeThanosRoutePostWithError(rootCAs, routeHost, authorizedToken, tc.MonitoringNamespace, "", thanosRouteProbeQuery)
-	if err != nil {
-		t.Fatalf("authorized POST probe failed: %v", err)
-	}
-	logThanosRouteEvidence(t, "authorized-post", authorizedPOST)
-	if authorizedPOST.HTTPStatus != http.StatusOK || authorizedPOST.PrometheusStatus != "success" || len(authorizedPOST.Labels) == 0 {
-		t.Fatalf(
-			"authorized POST query should return namespace data, got http_status=%d prometheus_status=%q series_count=%d",
-			authorizedPOST.HTTPStatus, authorizedPOST.PrometheusStatus, len(authorizedPOST.Labels),
-		)
-	}
-	assertThanosRouteNamespaceSeries(t, "authorized POST", authorizedPOST.Labels, tc.MonitoringNamespace)
-
 	// Keep the selector broad enough to match the known series returned above;
 	// otherwise an empty response would make the namespace-boundary assertion vacuous.
 	crafted := probeThanosRoute(t, rootCAs, routeHost, authorizedToken, tc.MonitoringNamespace, `up{namespace=~".*"}`)

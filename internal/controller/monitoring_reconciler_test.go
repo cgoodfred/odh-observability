@@ -276,6 +276,18 @@ func TestValidateMonitoringNamespace(t *testing.T) {
 		}
 	})
 
+	t.Run("empty namespace uses the configured Helm namespace", func(t *testing.T) {
+		emptyNamespace := m.DeepCopy()
+		emptyNamespace.Spec.Namespace = ""
+		t.Setenv("MONITORING_NAMESPACE", "redhat-ods-monitoring")
+		if got := monitoringNamespace(emptyNamespace); got != "redhat-ods-monitoring" {
+			t.Fatalf("monitoringNamespace: want redhat-ods-monitoring, got %q", got)
+		}
+		if err := validateMonitoringNamespace(emptyNamespace); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
 	t.Run("mismatched configuration is rejected", func(t *testing.T) {
 		t.Setenv("MONITORING_NAMESPACE", "redhat-ods-monitoring")
 		if err := validateMonitoringNamespace(m); err == nil {

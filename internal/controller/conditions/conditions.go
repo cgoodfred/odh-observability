@@ -195,7 +195,7 @@ func (cm *ConditionsManager) MarkUnknown(condType string) {
 // are excluded from Degraded aggregation — they represent user intent, not failures.
 //
 // Ready = False when MonitoringDependenciesReady is not True. A failed configured
-// feature leaves Ready=True and sets Degraded=True to report partial availability.
+// feature leaves Ready=False and sets Degraded=True to report partial unavailability.
 // Ready is Unknown while a configured feature is initializing and none is failing.
 // ProvisioningSucceeded = True when MonitoringDependenciesReady is True (manifests applied without error).
 // Degraded = True when a configured feature is failing (CRD missing, operator unavailable, etc.).
