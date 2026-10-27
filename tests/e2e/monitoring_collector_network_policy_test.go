@@ -333,16 +333,31 @@ for resource in jobs scrape_configs; do
 done
 # A reachable TLS listener must reject a client without its certificate.
 set +e
-connection=$(curl --noproxy '*' -sS --cacert /tls/ca.crt \
-  --connect-timeout 5 --max-time 15 -o /dev/null -w '%%{num_connects}:%%{http_code}' %q/jobs)
-result=$?
+for attempt in 1 2 3; do
+  rm -f /tmp/curl.err
+  connection=$(curl --noproxy '*' -sS --verbose --cacert /tls/ca.crt \
+    --connect-timeout 5 --max-time 15 -o /dev/null \
+    -w '%%{num_connects}:%%{http_code}' %q/jobs 2> /tmp/curl.err)
+  result=$?
+  if grep -Eqi 'Certificate request|certificate required|tlsv13 alert|unknown ca' /tmp/curl.err; then
+    printf 'missing client certificate: connection=%%s curl=%%s\n' "$connection" "$result"
+    test "$connection" = 1:000
+    # Curl versions can surface an mTLS rejection as 16 (HTTP/2 framing),
+    # 35 (TLS handshake), 55 (send failure/broken pipe), or 56 (recv failure).
+    # In each case the server requested a client certificate and no HTTP response was received.
+    test "$result" -eq 16 -o "$result" -eq 35 -o "$result" -eq 55 -o "$result" -eq 56
+    exit 0
+  fi
+  if [ "$result" -eq 55 ]; then
+    printf 'missing client certificate: inconclusive send failure on attempt %%s\n' "$attempt"
+    sleep 2
+    continue
+  fi
+  break
+done
 set -e
-printf 'missing client certificate: connection=%%s curl=%%s\n' "$connection" "$result"
-test "$connection" = 1:000
-# Curl versions can surface an mTLS rejection as 16 (HTTP/2 framing),
-# 35 (TLS handshake), 55 (send failure/broken pipe), or 56 (recv failure).
-# In each case the TCP connection succeeded without an HTTP response.
-test "$result" -eq 16 -o "$result" -eq 35 -o "$result" -eq 55 -o "$result" -eq 56
+printf 'missing client certificate: no certificate-specific TLS rejection\n'
+exit 1
 `, endpoint, endpoint)}
 		})
 	tc.runNetworkPolicyProbe(t, "targetallocator-mtls-untrusted-denied", tc.MonitoringNamespace,
