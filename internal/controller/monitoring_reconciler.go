@@ -74,6 +74,7 @@ const (
 	targetAllocatorOperatorPolicyName     = "data-science-collector-targetallocator-networkpolicy"
 )
 
+//nolint:goconst // Resource names intentionally mirror the rendered RBAC templates.
 var scopedClusterRoleNames = map[string]struct{}{
 	"data-science-collector-mlflow-trace-export": {},
 	"data-science-collector-tempo-trace-export":  {},
@@ -85,6 +86,7 @@ var scopedClusterRoleNames = map[string]struct{}{
 	"usage-logs-processor":                       {},
 }
 
+//nolint:goconst // Resource names intentionally mirror the rendered RBAC templates.
 var scopedClusterRoleBindingNames = map[string]struct{}{
 	"data-science-cluster-log-forwarder-collector-collect-app-logs":       {},
 	"data-science-cluster-log-forwarder-collector-loki-writer":            {},
