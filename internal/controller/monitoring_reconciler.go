@@ -99,6 +99,40 @@ const (
 // resources predating componentLabel.
 var lokiComponents = []string{componentLokiUsageLogs, componentLokiLogs}
 
+var scopedClusterRoleNames = map[string]struct{}{
+	"data-science-collector-mlflow-trace-export": {},
+	"data-science-collector-tempo-trace-export":  {},
+	"data-science-metrics-view":                  {},
+	"data-science-usage-logs-processor":          {},
+	"generate-processors-role":                   {},
+	"generate-processors-targetallocator-role":   {},
+	"korrel8r-query":                             {},
+	"usage-logs-processor":                       {},
+}
+
+var scopedClusterRoleBindingNames = map[string]struct{}{
+	"data-science-cluster-log-forwarder-collector-collect-app-logs":       {},
+	"data-science-cluster-log-forwarder-collector-loki-writer":            {},
+	"data-science-collector-mlflow-trace-export":                          {},
+	"data-science-collector-tempo-trace-export":                           {},
+	"data-science-monitoringstack-alertmanager-prometheus-metrics-reader": {},
+	"data-science-prometheus-cluster-proxy":                               {},
+	"data-science-prometheus-cluster-proxy-auth-delegator":                {},
+	"data-science-prometheus-namespace-proxy":                             {},
+	"data-science-prometheus-namespace-proxy-auth-delegator":              {},
+	"data-science-thanos-querier-proxy":                                   {},
+	"data-science-thanos-querier-proxy-auth-delegator":                    {},
+	"data-science-usage-logs-processor":                                   {},
+	"generate-processors-collector-rolebinding":                           {},
+	"generate-processors-targetallocator-discovery-rolebinding":           {},
+	"generate-processors-targetallocator-rolebinding":                     {},
+	"korrel8r-auth-delegator":                                             {},
+	"korrel8r-query":                                                      {},
+	"usage-logs-processor":                                                {},
+	"usage-logs-loki-writer":                                              {},
+	"data-science-usage-logs-loki-writer":                                 {},
+}
+
 func operatorVersion() string {
 	return os.Getenv("OPERATOR_VERSION")
 }
@@ -733,6 +767,10 @@ func (r *MonitoringReconciler) collectGarbage(
 		return err
 	}
 
+	if err := r.collectScopedClusterRBACGarbage(ctx, monitoring, desiredSet); err != nil {
+		return err
+	}
+
 	return r.collectTargetAllocatorRBACGarbage(ctx, params, desiredSet, namespace)
 }
 
@@ -761,7 +799,70 @@ func (r *MonitoringReconciler) deleteAllOwned(ctx context.Context, monitoring *v
 		return err
 	}
 
+	if err := r.collectScopedClusterRBACGarbage(ctx, monitoring, nil); err != nil {
+		return err
+	}
+
 	return r.collectTargetAllocatorRBACGarbage(ctx, params, nil, namespace)
+}
+
+func (r *MonitoringReconciler) collectScopedClusterRBACGarbage(
+	ctx context.Context,
+	monitoring *v1alpha1.Monitoring,
+	desiredSet map[resourceKey]struct{},
+) error {
+	roles := &rbacv1.ClusterRoleList{}
+	if err := r.List(ctx, roles, client.MatchingLabels{
+		odhLabels.PlatformPartOf: monitoringPartOf,
+	}); err != nil {
+		return fmt.Errorf("listing scoped ClusterRoles: %w", err)
+	}
+	for i := range roles.Items {
+		role := &roles.Items[i]
+		if !shouldCollectScopedClusterRBAC(monitoring, controllergvk.ClusterRole, role, scopedClusterRoleNames, desiredSet) {
+			continue
+		}
+		if err := r.Delete(ctx, role); err != nil && !k8serr.IsNotFound(err) {
+			return fmt.Errorf("deleting scoped ClusterRole %s: %w", role.Name, err)
+		}
+	}
+
+	bindings := &rbacv1.ClusterRoleBindingList{}
+	if err := r.List(ctx, bindings, client.MatchingLabels{
+		odhLabels.PlatformPartOf: monitoringPartOf,
+	}); err != nil {
+		return fmt.Errorf("listing scoped ClusterRoleBindings: %w", err)
+	}
+	for i := range bindings.Items {
+		binding := &bindings.Items[i]
+		if !shouldCollectScopedClusterRBAC(monitoring, controllergvk.ClusterRoleBinding, binding, scopedClusterRoleBindingNames, desiredSet) {
+			continue
+		}
+		if err := r.Delete(ctx, binding); err != nil && !k8serr.IsNotFound(err) {
+			return fmt.Errorf("deleting scoped ClusterRoleBinding %s: %w", binding.Name, err)
+		}
+	}
+
+	return nil
+}
+
+func shouldCollectScopedClusterRBAC(
+	monitoring *v1alpha1.Monitoring,
+	gvk schema.GroupVersionKind,
+	obj metav1.Object,
+	allowedNames map[string]struct{},
+	desiredSet map[resourceKey]struct{},
+) bool {
+	if _, allowed := allowedNames[obj.GetName()]; !allowed {
+		return false
+	}
+	if !isOwnedByMonitoring(monitoring, obj) {
+		return false
+	}
+
+	key := resourceKey{gvk: gvk, name: obj.GetName()}
+	_, desired := desiredSet[key]
+	return !desired
 }
 
 func (r *MonitoringReconciler) collectTargetAllocatorRBACGarbage(
