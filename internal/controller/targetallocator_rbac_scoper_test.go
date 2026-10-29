@@ -9,6 +9,7 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	k8serr "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -46,9 +47,18 @@ func TestTargetAllocatorRBACScoperCreatesToolkitManagedBindings(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: targetAllocatorSecretRBACName, Namespace: "inference"},
 		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: targetAllocatorSecretRBACName},
 	}
+	staleClusterBinding := &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "stale-managed-clusterrolebinding",
+			Labels: map[string]string{
+				rbacScoperManagedLabelKey:              rbacScoperManagedLabelValue,
+				TargetAllocatorRBACScoperOwnerLabelKey: TargetAllocatorRBACScoperOwnerLabelValue,
+			},
+		},
+	}
 
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).
-		WithObjects(monitoring, legacyBinding).
+		WithObjects(monitoring, legacyBinding, staleClusterBinding).
 		WithLists(&corev1.NamespaceList{Items: namespaces}).
 		Build()
 	scoper := &TargetAllocatorRBACScoper{
@@ -114,6 +124,30 @@ func TestTargetAllocatorRBACScoperCreatesToolkitManagedBindings(t *testing.T) {
 	if !controllerutil.ContainsFinalizer(monitoring, targetAllocatorRBACScoperFinalizer) {
 		t.Fatal("TargetAllocator RBAC scoper finalizer was not added")
 	}
+
+	clusterBindings := &rbacv1.ClusterRoleBindingList{}
+	if err := fakeClient.List(context.Background(), clusterBindings); err != nil {
+		t.Fatal(err)
+	}
+	expectedClusterBindings := map[string]bool{
+		"generate-processors-collector-rolebinding":                 true,
+		"generate-processors-targetallocator-rolebinding":           true,
+		"generate-processors-targetallocator-discovery-rolebinding": true,
+		"korrel8r-query":          true,
+		"korrel8r-auth-delegator": true,
+	}
+	for _, item := range clusterBindings.Items {
+		delete(expectedClusterBindings, item.Name)
+		if item.Name == "stale-managed-clusterrolebinding" {
+			t.Fatal("stale managed ClusterRoleBinding was not removed")
+		}
+		if !isManagedByTargetAllocatorRBACScoper(&item) {
+			t.Fatalf("ClusterRoleBinding %s is not managed by the scoper", item.Name)
+		}
+	}
+	if len(expectedClusterBindings) != 0 {
+		t.Fatalf("expected feature-dependent ClusterRoleBindings were not created: %v", expectedClusterBindings)
+	}
 }
 
 func TestTargetAllocatorRBACScoperTearsDownOnRemoved(t *testing.T) {
@@ -150,9 +184,18 @@ func TestTargetAllocatorRBACScoperTearsDownOnRemoved(t *testing.T) {
 			},
 		},
 	}
+	clusterBinding := &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "generate-processors-collector-rolebinding",
+			Labels: map[string]string{
+				rbacScoperManagedLabelKey:              rbacScoperManagedLabelValue,
+				TargetAllocatorRBACScoperOwnerLabelKey: TargetAllocatorRBACScoperOwnerLabelValue,
+			},
+		},
+	}
 
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).
-		WithObjects(monitoring, role, binding).
+		WithObjects(monitoring, role, binding, clusterBinding).
 		Build()
 	scoper := &TargetAllocatorRBACScoper{
 		Client:     fakeClient,
@@ -177,5 +220,23 @@ func TestTargetAllocatorRBACScoperTearsDownOnRemoved(t *testing.T) {
 		Name:      binding.Name,
 	}, binding); err != nil && !k8serr.IsNotFound(err) {
 		t.Fatalf("toolkit TargetAllocator RoleBinding was not removed: %v", err)
+	}
+	if err := fakeClient.Get(context.Background(), types.NamespacedName{Name: clusterBinding.Name}, clusterBinding); err != nil && !k8serr.IsNotFound(err) {
+		t.Fatalf("managed ClusterRoleBinding was not removed: %v", err)
+	}
+}
+
+func TestWithoutRBACScoperResourcesFiltersAllRBAC(t *testing.T) {
+	resources := []unstructured.Unstructured{
+		{Object: map[string]any{"apiVersion": "v1", "kind": "ConfigMap"}},
+		{Object: map[string]any{"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "Role"}},
+		{Object: map[string]any{"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "RoleBinding"}},
+		{Object: map[string]any{"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "ClusterRole"}},
+		{Object: map[string]any{"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "ClusterRoleBinding"}},
+	}
+
+	filtered := withoutRBACScoperResources(resources)
+	if len(filtered) != 1 || filtered[0].GetKind() != "ConfigMap" {
+		t.Fatalf("expected only non-RBAC resources to remain, got %#v", filtered)
 	}
 }

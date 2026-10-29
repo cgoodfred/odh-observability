@@ -2,6 +2,55 @@
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
+  name: {{ include "odh-observability.fullname" . }}-constrain-managed-clusterrolebindings
+  labels:
+    security.opendatahub.io/rbac-scoper: protected
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["clusterrolebindings"]
+  validations:
+    - expression: >-
+        request.userInfo.username != "system:serviceaccount:{{ .Values.operatorNamespace }}:{{ include "odh-observability.fullname" . }}-rbac-scoper" ||
+        (request.operation == "DELETE"
+          ? has(oldObject.metadata.labels) &&
+            oldObject.metadata.labels["operator-rbac-toolkit.io/managed"] == "true"
+          : has(object.metadata.labels) &&
+            object.metadata.labels["operator-rbac-toolkit.io/managed"] == "true" &&
+            ((object.metadata.name == "data-science-cluster-log-forwarder-collector-collect-app-logs" && object.roleRef.name == "collect-application-logs" && object.subjects[0].name == "data-science-cluster-log-forwarder-collector" && object.subjects[0].namespace == "openshift-logging") ||
+             (object.metadata.name == "data-science-cluster-log-forwarder-collector-loki-writer" && object.roleRef.name == "cluster-logging-write-application-logs" && object.subjects[0].name == "data-science-cluster-log-forwarder-collector" && object.subjects[0].namespace == "openshift-logging") ||
+             (object.metadata.name == "data-science-collector-mlflow-trace-export" && object.roleRef.name == "data-science-collector-mlflow-trace-export" && object.subjects[0].name == "data-science-collector-collector" && object.subjects[0].namespace == "{{ include "odh-observability.monitoringNamespace" . }}") ||
+             (object.metadata.name == "data-science-collector-tempo-trace-export" && object.roleRef.name == "data-science-collector-tempo-trace-export" && object.subjects[0].name == "data-science-collector-collector" && object.subjects[0].namespace == "{{ include "odh-observability.monitoringNamespace" . }}") ||
+             (object.metadata.name == "data-science-monitoringstack-alertmanager-prometheus-metrics-reader" && object.roleRef.name == "cluster-monitoring-view" && object.subjects[0].name == "data-science-monitoringstack-alertmanager" && object.subjects[0].namespace == "{{ include "odh-observability.monitoringNamespace" . }}") ||
+             (object.metadata.name == "data-science-usage-logs-processor" && object.roleRef.name == "data-science-usage-logs-processor" && object.subjects[0].name == "data-science-usage-logs-collector" && object.subjects[0].namespace == "{{ include "odh-observability.monitoringNamespace" . }}") ||
+             (object.metadata.name == "generate-processors-collector-rolebinding" && object.roleRef.name == "generate-processors-role" && object.subjects[0].name == "data-science-collector-collector" && object.subjects[0].namespace == "{{ include "odh-observability.monitoringNamespace" . }}") ||
+             (object.metadata.name == "generate-processors-targetallocator-discovery-rolebinding" && object.roleRef.name == "generate-processors-targetallocator-role" && object.subjects[0].name == "data-science-collector-targetallocator" && object.subjects[0].namespace == "{{ include "odh-observability.monitoringNamespace" . }}") ||
+             (object.metadata.name == "generate-processors-targetallocator-rolebinding" && object.roleRef.name == "generate-processors-role" && object.subjects[0].name == "data-science-collector-targetallocator" && object.subjects[0].namespace == "{{ include "odh-observability.monitoringNamespace" . }}") ||
+             (object.metadata.name == "korrel8r-auth-delegator" && object.roleRef.name == "system:auth-delegator" && object.subjects[0].name == "korrel8r" && object.subjects[0].namespace == "{{ include "odh-observability.monitoringNamespace" . }}") ||
+             (object.metadata.name == "korrel8r-query" && object.roleRef.name == "korrel8r-query" && object.subjects[0].name == "korrel8r" && object.subjects[0].namespace == "{{ include "odh-observability.monitoringNamespace" . }}")) &&
+            size(object.subjects) == 1 &&
+            object.subjects[0].kind == "ServiceAccount" &&
+            object.roleRef.apiGroup == "rbac.authorization.k8s.io" &&
+            object.roleRef.kind == "ClusterRole")
+      message: "The RBAC scoper may only create the exact managed ClusterRoleBindings."
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "odh-observability.fullname" . }}-constrain-managed-clusterrolebindings
+  labels:
+    security.opendatahub.io/rbac-scoper: protected
+spec:
+  policyName: {{ include "odh-observability.fullname" . }}-constrain-managed-clusterrolebindings
+  validationActions: [Deny]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
   name: {{ include "odh-observability.fullname" . }}-constrain-targetallocator-rbac
   labels:
     security.opendatahub.io/rbac-scoper: protected

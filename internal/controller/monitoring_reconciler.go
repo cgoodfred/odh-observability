@@ -511,7 +511,27 @@ func (r *MonitoringReconciler) renderMonitoringResources(
 	if err != nil {
 		return nil, fmt.Errorf("rendering templates: %w", err)
 	}
+	if targetAllocatorRBACScoperEnabled() {
+		desired = withoutRBACScoperResources(desired)
+	}
 	return desired, nil
+}
+
+func withoutRBACScoperResources(resources []unstructured.Unstructured) []unstructured.Unstructured {
+	filtered := make([]unstructured.Unstructured, 0, len(resources))
+	for _, resource := range resources {
+		if !isRBACResource(resource.GroupVersionKind()) {
+			filtered = append(filtered, resource)
+		}
+	}
+	return filtered
+}
+
+func isRBACResource(gvk schema.GroupVersionKind) bool {
+	return gvk == controllergvk.Role ||
+		gvk == controllergvk.RoleBinding ||
+		gvk == controllergvk.ClusterRole ||
+		gvk == controllergvk.ClusterRoleBinding
 }
 
 func (r *MonitoringReconciler) preparePrometheusWebTLSCA(
@@ -604,6 +624,9 @@ func (r *MonitoringReconciler) collectGarbage(ctx context.Context, monitoring *v
 		gc.InNamespace(namespace),
 		gc.WithDeletePropagationPolicy(metav1.DeletePropagationBackground),
 		gc.WithObjectPredicate(func(_ gc.RunParams, obj unstructured.Unstructured) (bool, error) {
+			if targetAllocatorRBACScoperEnabled() && isRBACResource(obj.GroupVersionKind()) {
+				return false, nil
+			}
 			return shouldCollectOwnedResource(monitoring, obj, desiredSet, namespace), nil
 		}),
 	)
@@ -642,6 +665,9 @@ func (r *MonitoringReconciler) deleteAllOwned(ctx context.Context, monitoring *v
 		gc.InNamespace(namespace),
 		gc.WithDeletePropagationPolicy(metav1.DeletePropagationBackground),
 		gc.WithObjectPredicate(func(_ gc.RunParams, obj unstructured.Unstructured) (bool, error) {
+			if targetAllocatorRBACScoperEnabled() && isRBACResource(obj.GroupVersionKind()) {
+				return false, nil
+			}
 			return isOwnedByMonitoring(monitoring, &obj) && isInMonitoringScope(&obj, namespace), nil
 		}),
 	)
@@ -676,6 +702,9 @@ func (r *MonitoringReconciler) collectScopedClusterRBACGarbage(
 	monitoring *v1alpha1.Monitoring,
 	desiredSet map[resourceKey]struct{},
 ) error {
+	if targetAllocatorRBACScoperEnabled() {
+		return nil
+	}
 	roles := &rbacv1.ClusterRoleList{}
 	if err := r.List(ctx, roles, client.MatchingLabels{
 		odhLabels.PlatformPartOf: monitoringPartOf,

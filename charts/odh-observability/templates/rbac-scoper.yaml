@@ -29,12 +29,30 @@ rules:
     resources: ["roles", "rolebindings"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterroles", "clusterrolebindings"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["roles"]
     resourceNames: ["data-science-collector-targetallocator-secrets"]
     verbs: ["create", "update", "patch", "delete"]
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["rolebindings"]
     resourceNames: ["data-science-collector-targetallocator-secrets-binding"]
+    verbs: ["create", "update", "patch", "delete"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterrolebindings"]
+    resourceNames:
+      - data-science-cluster-log-forwarder-collector-collect-app-logs
+      - data-science-cluster-log-forwarder-collector-loki-writer
+      - data-science-collector-mlflow-trace-export
+      - data-science-collector-tempo-trace-export
+      - data-science-monitoringstack-alertmanager-prometheus-metrics-reader
+      - data-science-usage-logs-processor
+      - generate-processors-collector-rolebinding
+      - generate-processors-targetallocator-discovery-rolebinding
+      - generate-processors-targetallocator-rolebinding
+      - korrel8r-auth-delegator
+      - korrel8r-query
     verbs: ["create", "update", "patch", "delete"]
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]

@@ -9,6 +9,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	k8serr "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -25,6 +26,18 @@ const (
 	rbacVerbGet                              = "get"
 	rbacVerbList                             = "list"
 	rbacVerbWatch                            = "watch"
+	rbacScoperManagedLabelKey                = "operator-rbac-toolkit.io/managed"
+	rbacScoperManagedLabelValue              = "true"
+	rbacKindClusterRole                      = "ClusterRole"
+	collectorServiceAccountName              = "data-science-collector-collector"
+	collectorClusterRoleBindingName          = "generate-processors-collector-rolebinding"
+	collectorClusterRoleName                 = "generate-processors-role"
+	targetAllocatorLegacyBindingName         = "generate-processors-targetallocator-rolebinding"
+	targetAllocatorDiscoveryBindingName      = "generate-processors-targetallocator-discovery-rolebinding"
+	targetAllocatorDiscoveryClusterRoleName  = "generate-processors-targetallocator-role"
+	mlflowTraceExportBindingName             = "data-science-collector-mlflow-trace-export"
+	tempoTraceExportBindingName              = "data-science-collector-tempo-trace-export"
+	usageLogsProcessorBindingName            = "data-science-usage-logs-processor"
 )
 
 // TargetAllocatorRBACScoper moves the TargetAllocator Secret RoleBindings into
@@ -34,6 +47,14 @@ type TargetAllocatorRBACScoper struct {
 	client.Client
 
 	Reconciler *crossns.Reconciler
+}
+
+type clusterRoleBindingSpec struct {
+	name             string
+	roleRef          string
+	subjectKind      string
+	subjectName      string
+	subjectNamespace string
 }
 
 func (r *TargetAllocatorRBACScoper) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -67,9 +88,21 @@ func (r *TargetAllocatorRBACScoper) Reconcile(ctx context.Context, req ctrl.Requ
 		}
 	}
 
-	if !monitoring.DeletionTimestamp.IsZero() ||
-		monitoring.Spec.ManagementState == platformcommon.Removed ||
-		monitoring.Spec.Metrics == nil {
+	if monitoring.Spec.ManagementState == platformcommon.Removed {
+		if err := r.reconcileClusterRoleBindings(ctx, nil); err != nil {
+			return ctrl.Result{}, err
+		}
+		if err := r.Reconciler.Teardown(ctx); err != nil {
+			return ctrl.Result{}, fmt.Errorf("tearing down TargetAllocator RBAC: %w", err)
+		}
+		return ctrl.Result{}, nil
+	}
+
+	if err := r.reconcileClusterRoleBindings(ctx, desiredClusterRoleBindings(monitoring)); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	if monitoring.Spec.Metrics == nil {
 		return ctrl.Result{}, r.Reconciler.Teardown(ctx)
 	}
 
@@ -103,6 +136,209 @@ func (r *TargetAllocatorRBACScoper) Reconcile(ctx context.Context, req ctrl.Requ
 	}
 
 	return ctrl.Result{}, nil
+}
+
+func desiredClusterRoleBindings(monitoring *v1alpha1.Monitoring) []clusterRoleBindingSpec {
+	namespace := monitoringNamespace(monitoring)
+	metrics := monitoring.Spec.Metrics != nil
+	metricsStorage := metrics && monitoring.Spec.Metrics.Storage != nil
+	traces := monitoring.Spec.Traces != nil
+	tracesStorage := traces && monitoring.Spec.Traces.Storage != nil
+	logs := monitoring.Spec.Logs != nil
+	usageLogs := monitoring.Spec.UsageLogs != nil && monitoring.Spec.UsageLogs.Storage != nil
+
+	var bindings []clusterRoleBindingSpec
+	if metrics || traces {
+		bindings = append(bindings, clusterRoleBindingSpec{
+			name:             collectorClusterRoleBindingName,
+			roleRef:          collectorClusterRoleName,
+			subjectKind:      rbacv1.ServiceAccountKind,
+			subjectName:      collectorServiceAccountName,
+			subjectNamespace: namespace,
+		})
+	}
+
+	if metrics {
+		bindings = append(bindings,
+			clusterRoleBindingSpec{
+				name:             targetAllocatorLegacyBindingName,
+				roleRef:          collectorClusterRoleName,
+				subjectKind:      rbacv1.ServiceAccountKind,
+				subjectName:      targetAllocatorServiceAccountName,
+				subjectNamespace: namespace,
+			},
+			clusterRoleBindingSpec{
+				name:             targetAllocatorDiscoveryBindingName,
+				roleRef:          targetAllocatorDiscoveryClusterRoleName,
+				subjectKind:      rbacv1.ServiceAccountKind,
+				subjectName:      targetAllocatorServiceAccountName,
+				subjectNamespace: namespace,
+			})
+	}
+	if metricsStorage {
+		bindings = append(bindings, clusterRoleBindingSpec{
+			name:             "data-science-monitoringstack-alertmanager-prometheus-metrics-reader",
+			roleRef:          "cluster-monitoring-view",
+			subjectKind:      rbacv1.ServiceAccountKind,
+			subjectName:      "data-science-monitoringstack-alertmanager",
+			subjectNamespace: namespace,
+		})
+	}
+	if traces {
+		bindings = append(bindings, clusterRoleBindingSpec{
+			name:             mlflowTraceExportBindingName,
+			roleRef:          mlflowTraceExportBindingName,
+			subjectKind:      rbacv1.ServiceAccountKind,
+			subjectName:      collectorServiceAccountName,
+			subjectNamespace: namespace,
+		})
+	}
+	if tracesStorage {
+		bindings = append(bindings, clusterRoleBindingSpec{
+			name:             tempoTraceExportBindingName,
+			roleRef:          tempoTraceExportBindingName,
+			subjectKind:      rbacv1.ServiceAccountKind,
+			subjectName:      collectorServiceAccountName,
+			subjectNamespace: namespace,
+		})
+	}
+	if logs {
+		bindings = append(bindings,
+			clusterRoleBindingSpec{
+				name:             "data-science-cluster-log-forwarder-collector-collect-app-logs",
+				roleRef:          "collect-application-logs",
+				subjectKind:      rbacv1.ServiceAccountKind,
+				subjectName:      clusterLogForwarderResourceName + "-collector",
+				subjectNamespace: clusterLoggingNamespace,
+			},
+			clusterRoleBindingSpec{
+				name:             "data-science-cluster-log-forwarder-collector-loki-writer",
+				roleRef:          "cluster-logging-write-application-logs",
+				subjectKind:      rbacv1.ServiceAccountKind,
+				subjectName:      clusterLogForwarderResourceName + "-collector",
+				subjectNamespace: clusterLoggingNamespace,
+			})
+	}
+	if metrics || traces || logs {
+		bindings = append(bindings,
+			clusterRoleBindingSpec{
+				name:             Korrel8rServiceName + "-query",
+				roleRef:          Korrel8rServiceName + "-query",
+				subjectKind:      rbacv1.ServiceAccountKind,
+				subjectName:      Korrel8rServiceName,
+				subjectNamespace: namespace,
+			},
+			clusterRoleBindingSpec{
+				name:             Korrel8rServiceName + "-auth-delegator",
+				roleRef:          "system:auth-delegator",
+				subjectKind:      rbacv1.ServiceAccountKind,
+				subjectName:      Korrel8rServiceName,
+				subjectNamespace: namespace,
+			})
+	}
+	if usageLogs {
+		bindings = append(bindings, clusterRoleBindingSpec{
+			name:             usageLogsProcessorBindingName,
+			roleRef:          usageLogsProcessorBindingName,
+			subjectKind:      rbacv1.ServiceAccountKind,
+			subjectName:      "data-science-usage-logs-collector",
+			subjectNamespace: namespace,
+		})
+	}
+	return bindings
+}
+
+func (r *TargetAllocatorRBACScoper) reconcileClusterRoleBindings(
+	ctx context.Context,
+	specs []clusterRoleBindingSpec,
+) error {
+	desired := make(map[string]clusterRoleBindingSpec, len(specs))
+	for _, spec := range specs {
+		desired[spec.name] = spec
+		if err := r.applyClusterRoleBinding(ctx, spec); err != nil {
+			return err
+		}
+	}
+
+	bindings := &rbacv1.ClusterRoleBindingList{}
+	if err := r.List(ctx, bindings, r.managedLabels()); err != nil {
+		return fmt.Errorf("listing managed ClusterRoleBindings: %w", err)
+	}
+	for i := range bindings.Items {
+		binding := bindings.Items[i]
+		if _, found := desired[binding.Name]; found {
+			continue
+		}
+		if err := r.Delete(ctx, &binding); client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("deleting stale managed ClusterRoleBinding %s: %w", binding.Name, err)
+		}
+	}
+	return nil
+}
+
+func (r *TargetAllocatorRBACScoper) applyClusterRoleBinding(ctx context.Context, spec clusterRoleBindingSpec) error {
+	labels := r.managedLabels()
+	subject := rbacv1.Subject{
+		Kind:      spec.subjectKind,
+		Name:      spec.subjectName,
+		Namespace: spec.subjectNamespace,
+	}
+	roleRef := rbacv1.RoleRef{
+		APIGroup: rbacv1.GroupName,
+		Kind:     rbacKindClusterRole,
+		Name:     spec.roleRef,
+	}
+
+	existing := &rbacv1.ClusterRoleBinding{}
+	err := r.Get(ctx, client.ObjectKey{Name: spec.name}, existing)
+	if k8serr.IsNotFound(err) {
+		return r.Create(ctx, &rbacv1.ClusterRoleBinding{
+			ObjectMeta: metav1.ObjectMeta{Name: spec.name, Labels: labels},
+			RoleRef:    roleRef,
+			Subjects:   []rbacv1.Subject{subject},
+		})
+	}
+	if err != nil {
+		return fmt.Errorf("getting ClusterRoleBinding %s: %w", spec.name, err)
+	}
+
+	if existing.RoleRef != roleRef {
+		if err := r.Delete(ctx, existing); client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("deleting drifted ClusterRoleBinding %s: %w", spec.name, err)
+		}
+		binding := existing.DeepCopy()
+		binding.ResourceVersion = ""
+		binding.RoleRef = roleRef
+		binding.Subjects = []rbacv1.Subject{subject}
+		binding.Labels = labels
+		return r.Create(ctx, binding)
+	}
+
+	changed := false
+	if len(existing.Subjects) != 1 || existing.Subjects[0] != subject {
+		existing.Subjects = []rbacv1.Subject{subject}
+		changed = true
+	}
+	if existing.Labels == nil {
+		existing.Labels = map[string]string{}
+	}
+	for key, value := range labels {
+		if existing.Labels[key] != value {
+			existing.Labels[key] = value
+			changed = true
+		}
+	}
+	if changed {
+		return r.Update(ctx, existing)
+	}
+	return nil
+}
+
+func (r *TargetAllocatorRBACScoper) managedLabels() client.MatchingLabels {
+	return client.MatchingLabels{
+		rbacScoperManagedLabelKey:              rbacScoperManagedLabelValue,
+		TargetAllocatorRBACScoperOwnerLabelKey: TargetAllocatorRBACScoperOwnerLabelValue,
+	}
 }
 
 func (r *TargetAllocatorRBACScoper) removeLegacyTargetAllocatorBindings(ctx context.Context) error {
@@ -163,7 +399,22 @@ func (r *TargetAllocatorRBACScoper) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.Monitoring{}).
 		Watches(&corev1.Namespace{}, handler.EnqueueRequestsFromMapFunc(r.monitoringRequests)).
+		Watches(&rbacv1.RoleBinding{}, handler.EnqueueRequestsFromMapFunc(r.managedRBACRequests)).
+		Watches(&rbacv1.ClusterRoleBinding{}, handler.EnqueueRequestsFromMapFunc(r.managedRBACRequests)).
 		Complete(r)
+}
+
+func (r *TargetAllocatorRBACScoper) managedRBACRequests(ctx context.Context, object client.Object) []reconcile.Request {
+	if !isManagedByTargetAllocatorRBACScoper(object) {
+		return nil
+	}
+	return r.monitoringRequests(ctx, object)
+}
+
+func isManagedByTargetAllocatorRBACScoper(object client.Object) bool {
+	labels := object.GetLabels()
+	return labels[rbacScoperManagedLabelKey] == rbacScoperManagedLabelValue &&
+		labels[TargetAllocatorRBACScoperOwnerLabelKey] == TargetAllocatorRBACScoperOwnerLabelValue
 }
 
 func (r *TargetAllocatorRBACScoper) monitoringRequests(ctx context.Context, _ client.Object) []reconcile.Request {
