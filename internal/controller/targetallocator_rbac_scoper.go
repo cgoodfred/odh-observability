@@ -11,6 +11,7 @@ import (
 	k8serr "k8s.io/apimachinery/pkg/api/errors"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -18,6 +19,7 @@ import (
 )
 
 const (
+	targetAllocatorRBACScoperFinalizer       = "monitoring.opendatahub.io/rbac-scoper-cleanup"
 	TargetAllocatorRBACScoperOwnerLabelKey   = "app.kubernetes.io/name"
 	TargetAllocatorRBACScoperOwnerLabelValue = "odh-observability-targetallocator-rbac"
 	rbacVerbGet                              = "get"
@@ -43,6 +45,28 @@ func (r *TargetAllocatorRBACScoper) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, err
 	}
 
+	if !monitoring.DeletionTimestamp.IsZero() {
+		if err := r.Reconciler.Teardown(ctx); err != nil {
+			return ctrl.Result{}, fmt.Errorf("tearing down TargetAllocator RBAC: %w", err)
+		}
+		if controllerutil.ContainsFinalizer(monitoring, targetAllocatorRBACScoperFinalizer) {
+			patch := client.MergeFrom(monitoring.DeepCopy())
+			controllerutil.RemoveFinalizer(monitoring, targetAllocatorRBACScoperFinalizer)
+			if err := r.Patch(ctx, monitoring, patch); err != nil {
+				return ctrl.Result{}, fmt.Errorf("removing TargetAllocator RBAC scoper finalizer: %w", err)
+			}
+		}
+		return ctrl.Result{}, nil
+	}
+
+	if !controllerutil.ContainsFinalizer(monitoring, targetAllocatorRBACScoperFinalizer) {
+		patch := client.MergeFrom(monitoring.DeepCopy())
+		controllerutil.AddFinalizer(monitoring, targetAllocatorRBACScoperFinalizer)
+		if err := r.Patch(ctx, monitoring, patch); err != nil {
+			return ctrl.Result{}, fmt.Errorf("adding TargetAllocator RBAC scoper finalizer: %w", err)
+		}
+	}
+
 	if !monitoring.DeletionTimestamp.IsZero() ||
 		monitoring.Spec.ManagementState == platformcommon.Removed ||
 		monitoring.Spec.Metrics == nil {
@@ -52,10 +76,6 @@ func (r *TargetAllocatorRBACScoper) Reconcile(ctx context.Context, req ctrl.Requ
 	namespaces, err := listAllNamespaces(ctx, r.Client, monitoringNamespace(monitoring))
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("listing TargetAllocator Secret namespaces: %w", err)
-	}
-
-	if err := r.removeLegacyTargetAllocatorBindings(ctx); err != nil {
-		return ctrl.Result{}, err
 	}
 
 	ruleSets := make([]crossns.RuleSet, 0, len(namespaces))
@@ -76,6 +96,10 @@ func (r *TargetAllocatorRBACScoper) Reconcile(ctx context.Context, req ctrl.Requ
 		Namespace: monitoringNamespace(monitoring),
 	}, ruleSets); err != nil {
 		return ctrl.Result{}, fmt.Errorf("applying TargetAllocator RBAC: %w", err)
+	}
+
+	if err := r.removeLegacyTargetAllocatorBindings(ctx); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	return ctrl.Result{}, nil

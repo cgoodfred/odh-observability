@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	v1alpha1 "github.com/opendatahub-io/odh-observability/api/v1alpha1"
 )
@@ -106,6 +107,12 @@ func TestTargetAllocatorRBACScoperCreatesToolkitManagedBindings(t *testing.T) {
 	}
 	if kubeSystemBindings != 0 {
 		t.Fatal("TargetAllocator RoleBinding was created in a system namespace")
+	}
+	if err := fakeClient.Get(context.Background(), types.NamespacedName{Name: v1alpha1.MonitoringInstanceName}, monitoring); err != nil {
+		t.Fatal(err)
+	}
+	if !controllerutil.ContainsFinalizer(monitoring, targetAllocatorRBACScoperFinalizer) {
+		t.Fatal("TargetAllocator RBAC scoper finalizer was not added")
 	}
 }
 
