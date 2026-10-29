@@ -136,12 +136,7 @@ type MonitoringReconciler struct {
 // +kubebuilder:rbac:groups=opentelemetry.io,resources=opentelemetrycollectors;instrumentations,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=perses.dev,resources=perses;persesdatasources;persesdashboards,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=admissionregistration.k8s.io,resources=validatingadmissionpolicies;validatingadmissionpolicybindings,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings;clusterroles;clusterrolebindings,verbs=get;list;watch;create
-// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,resourceNames=data-science-collector-targetallocator-secrets,verbs=update;patch;delete
-// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,resourceNames=data-science-collector-mlflow-trace-export;data-science-collector-tempo-trace-export;data-science-metrics-view;data-science-usage-logs-processor;generate-processors-role;generate-processors-targetallocator-role;korrel8r-query,verbs=update;patch;delete
-// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,resourceNames=data-science-cluster-log-forwarder-collector-collect-app-logs;data-science-cluster-log-forwarder-collector-loki-writer;data-science-collector-mlflow-trace-export;data-science-collector-tempo-trace-export;data-science-monitoringstack-alertmanager-prometheus-metrics-reader;data-science-prometheus-cluster-proxy;data-science-prometheus-cluster-proxy-auth-delegator;data-science-prometheus-namespace-proxy;data-science-prometheus-namespace-proxy-auth-delegator;data-science-thanos-querier-proxy;data-science-thanos-querier-proxy-auth-delegator;data-science-usage-logs-processor;generate-processors-collector-rolebinding;generate-processors-targetallocator-discovery-rolebinding;generate-processors-targetallocator-rolebinding;korrel8r-auth-delegator;korrel8r-query,verbs=update;patch;delete
-// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,resourceNames=usage-logs-processor,verbs=delete
-// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,resourceNames=usage-logs-processor;usage-logs-loki-writer;data-science-usage-logs-loki-writer,verbs=delete
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings;clusterroles;clusterrolebindings,verbs=get;list;watch
 // +kubebuilder:rbac:groups=monitoring.coreos.com,resources=podmonitors;servicemonitors,verbs=*
 // +kubebuilder:rbac:groups=monitoring.coreos.com,resources=scrapeconfigs,verbs=get;list;watch
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch
@@ -956,13 +951,21 @@ func (r *MonitoringReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		predicate.NewPredicateFuncs(isOpenTelemetryOperatorNetworkPolicyEvent))
 	platformConfigPredicate := predicate.NewPredicateFuncs(isPlatformConfigMap)
 
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&v1alpha1.Monitoring{}).
-		// Watch managed resources for drift detection.
-		Watches(&rbacv1.Role{}, toSingleton, builder.WithPredicates(managedPredicate)).
-		Watches(&rbacv1.RoleBinding{}, toSingleton, builder.WithPredicates(managedPredicate)).
-		Watches(&rbacv1.ClusterRole{}, toSingleton, builder.WithPredicates(managedPredicate)).
-		Watches(&rbacv1.ClusterRoleBinding{}, toSingleton, builder.WithPredicates(managedPredicate)).
+	controller := ctrl.NewControllerManagedBy(mgr).
+		For(&v1alpha1.Monitoring{})
+
+	// In scoper mode RBAC drift belongs to the separate controller. Keep these
+	// watches only for the legacy manager-owned fallback.
+	if !targetAllocatorRBACScoperEnabled() {
+		controller = controller.
+			// Watch managed resources for drift detection.
+			Watches(&rbacv1.Role{}, toSingleton, builder.WithPredicates(managedPredicate)).
+			Watches(&rbacv1.RoleBinding{}, toSingleton, builder.WithPredicates(managedPredicate)).
+			Watches(&rbacv1.ClusterRole{}, toSingleton, builder.WithPredicates(managedPredicate)).
+			Watches(&rbacv1.ClusterRoleBinding{}, toSingleton, builder.WithPredicates(managedPredicate))
+	}
+
+	return controller.
 		Watches(&networkingv1.NetworkPolicy{}, toSingleton, builder.WithPredicates(networkPolicyPredicate)).
 		Watches(&appsv1.Deployment{}, toSingleton, builder.WithPredicates(managedPredicate)).
 		Watches(&batchv1.Job{}, toSingleton, builder.WithPredicates(managedPredicate)).
