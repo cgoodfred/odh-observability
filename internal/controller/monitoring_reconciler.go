@@ -675,7 +675,7 @@ func (r *MonitoringReconciler) collectScopedClusterRBACGarbage(
 		if !shouldCollectScopedClusterRBAC(monitoring, controllergvk.ClusterRole, role, scopedClusterRoleNames, desiredSet) {
 			continue
 		}
-		if err := r.Delete(ctx, role); err != nil && !k8serr.IsNotFound(err) {
+		if err := r.Delete(ctx, role, scopedRBACDeleteOptions(role)); err != nil && !k8serr.IsNotFound(err) {
 			return fmt.Errorf("deleting scoped ClusterRole %s: %w", role.Name, err)
 		}
 	}
@@ -691,12 +691,23 @@ func (r *MonitoringReconciler) collectScopedClusterRBACGarbage(
 		if !shouldCollectScopedClusterRBAC(monitoring, controllergvk.ClusterRoleBinding, binding, scopedClusterRoleBindingNames, desiredSet) {
 			continue
 		}
-		if err := r.Delete(ctx, binding); err != nil && !k8serr.IsNotFound(err) {
+		if err := r.Delete(ctx, binding, scopedRBACDeleteOptions(binding)); err != nil && !k8serr.IsNotFound(err) {
 			return fmt.Errorf("deleting scoped ClusterRoleBinding %s: %w", binding.Name, err)
 		}
 	}
 
 	return nil
+}
+
+func scopedRBACDeleteOptions(obj metav1.Object) *client.DeleteOptions {
+	uid := obj.GetUID()
+	resourceVersion := obj.GetResourceVersion()
+	return &client.DeleteOptions{
+		Preconditions: &metav1.Preconditions{
+			UID:             &uid,
+			ResourceVersion: &resourceVersion,
+		},
+	}
 }
 
 func shouldCollectScopedClusterRBAC(

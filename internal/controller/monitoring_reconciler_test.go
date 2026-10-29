@@ -1332,6 +1332,29 @@ func TestScopedClusterRBACGarbageCollection(t *testing.T) {
 	}
 }
 
+func TestScopedRBACDeleteOptionsIncludeIdentityPreconditions(t *testing.T) {
+	t.Parallel()
+
+	role := &rbacv1.ClusterRole{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            "data-science-collector-mlflow-trace-export",
+			UID:             types.UID("scoped-role-uid"),
+			ResourceVersion: "42",
+		},
+	}
+
+	options := scopedRBACDeleteOptions(role)
+	if options.Preconditions == nil {
+		t.Fatal("scoped RBAC delete must set identity preconditions")
+	}
+	if options.Preconditions.UID == nil || *options.Preconditions.UID != role.UID {
+		t.Errorf("scoped RBAC delete UID precondition: got %v, want %s", options.Preconditions.UID, role.UID)
+	}
+	if options.Preconditions.ResourceVersion == nil || *options.Preconditions.ResourceVersion != role.ResourceVersion {
+		t.Errorf("scoped RBAC delete resourceVersion precondition: got %v, want %q", options.Preconditions.ResourceVersion, role.ResourceVersion)
+	}
+}
+
 func TestIsOpenTelemetryOperatorNetworkPolicy(t *testing.T) {
 	t.Parallel()
 
