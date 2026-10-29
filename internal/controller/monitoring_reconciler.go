@@ -345,6 +345,9 @@ func (r *MonitoringReconciler) reconcile(ctx context.Context, monitoring *v1alph
 	}); err != nil {
 		return ctrl.Result{}, fmt.Errorf("applying resources: %w", err)
 	}
+	if err := r.verifyRBACScoper(ctx, monitoring, data); err != nil {
+		return ctrl.Result{}, fmt.Errorf("verifying RBAC scoper resources: %w", err)
+	}
 	if err := r.cleanupOpenTelemetryOperatorNetworkPolicies(ctx, monitoringNamespace(monitoring)); err != nil {
 		return ctrl.Result{}, fmt.Errorf("cleaning up OpenTelemetry Operator NetworkPolicies: %w", err)
 	}

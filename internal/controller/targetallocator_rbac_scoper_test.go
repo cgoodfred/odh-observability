@@ -148,6 +148,13 @@ func TestTargetAllocatorRBACScoperCreatesToolkitManagedBindings(t *testing.T) {
 	if len(expectedClusterBindings) != 0 {
 		t.Fatalf("expected feature-dependent ClusterRoleBindings were not created: %v", expectedClusterBindings)
 	}
+
+	manager := &MonitoringReconciler{Client: fakeClient}
+	if err := manager.verifyRBACScoper(context.Background(), monitoring, map[string]any{
+		"TargetAllocatorSecretNamespaces": []string{"redhat-ods-monitoring", "inference"},
+	}); err != nil {
+		t.Fatalf("RBAC scoper resources failed readiness verification: %v", err)
+	}
 }
 
 func TestTargetAllocatorRBACScoperTearsDownOnRemoved(t *testing.T) {

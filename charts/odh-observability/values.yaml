@@ -38,10 +38,10 @@ resources:
 # Leader election - enable when running multiple replicas.
 leaderElect: false
 
-# Experimental Operator RBAC Toolkit integration. The scoper owns the dynamic
-# TargetAllocator Secret RoleBindings and removes those writes from the manager.
+# Operator RBAC Toolkit integration. The protected scoper owns all dynamic
+# RoleBindings; the manager retains read-only RBAC access.
 rbacScoper:
-  enabled: false
+  enabled: true
   resources:
     limits:
       cpu: 100m

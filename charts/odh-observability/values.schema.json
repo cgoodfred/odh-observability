@@ -77,7 +77,7 @@
       "properties": {
         "enabled": {
           "type": "boolean",
-          "description": "Enable the experimental TargetAllocator RBAC scoper"
+          "description": "Enable the protected TargetAllocator RBAC scoper"
         },
         "resources": {
           "type": "object",

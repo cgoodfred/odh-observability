@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	platformcommon "github.com/opendatahub-io/odh-platform-utilities/api/common"
@@ -10,6 +11,7 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	k8serr "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -339,6 +341,48 @@ func (r *TargetAllocatorRBACScoper) managedLabels() client.MatchingLabels {
 		rbacScoperManagedLabelKey:              rbacScoperManagedLabelValue,
 		TargetAllocatorRBACScoperOwnerLabelKey: TargetAllocatorRBACScoperOwnerLabelValue,
 	}
+}
+
+func (r *MonitoringReconciler) verifyRBACScoper(
+	ctx context.Context,
+	monitoring *v1alpha1.Monitoring,
+	data map[string]any,
+) error {
+	if !targetAllocatorRBACScoperEnabled() {
+		return nil
+	}
+
+	for _, spec := range desiredClusterRoleBindings(monitoring) {
+		binding := &rbacv1.ClusterRoleBinding{}
+		if err := r.Get(ctx, client.ObjectKey{Name: spec.name}, binding); err != nil {
+			return fmt.Errorf("getting managed ClusterRoleBinding %s: %w", spec.name, err)
+		}
+		if !isManagedByTargetAllocatorRBACScoper(binding) {
+			return fmt.Errorf("ClusterRoleBinding %s is not managed by the RBAC scoper", spec.name)
+		}
+	}
+
+	if monitoring.Spec.Metrics == nil {
+		return nil
+	}
+	namespaces, ok := data["TargetAllocatorSecretNamespaces"].([]string)
+	if !ok {
+		return errors.New("TargetAllocator Secret namespace set is unavailable")
+	}
+	for _, namespace := range namespaces {
+		binding := &rbacv1.RoleBinding{}
+		err := r.Get(ctx, types.NamespacedName{
+			Namespace: namespace,
+			Name:      targetAllocatorSecretRBACName + "-binding",
+		}, binding)
+		if err != nil {
+			return fmt.Errorf("getting TargetAllocator Secret RoleBinding in namespace %s: %w", namespace, err)
+		}
+		if binding.Labels[crossns.ManagedLabelKey] != crossns.ManagedLabelValue {
+			return fmt.Errorf("TargetAllocator Secret RoleBinding in namespace %s is not toolkit managed", namespace)
+		}
+	}
+	return nil
 }
 
 func (r *TargetAllocatorRBACScoper) removeLegacyTargetAllocatorBindings(ctx context.Context) error {
