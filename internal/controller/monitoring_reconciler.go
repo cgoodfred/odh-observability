@@ -624,6 +624,12 @@ func (r *MonitoringReconciler) collectGarbage(ctx context.Context, monitoring *v
 		return err
 	}
 
+	if targetAllocatorRBACScoperEnabled() {
+		return nil
+	}
+	if err := r.cleanupTargetAllocatorScoperRBAC(ctx); err != nil {
+		return err
+	}
 	return r.collectTargetAllocatorRBACGarbage(ctx, params, desiredSet, namespace)
 }
 
@@ -656,6 +662,12 @@ func (r *MonitoringReconciler) deleteAllOwned(ctx context.Context, monitoring *v
 		return err
 	}
 
+	if targetAllocatorRBACScoperEnabled() {
+		return nil
+	}
+	if err := r.cleanupTargetAllocatorScoperRBAC(ctx); err != nil {
+		return err
+	}
 	return r.collectTargetAllocatorRBACGarbage(ctx, params, nil, namespace)
 }
 

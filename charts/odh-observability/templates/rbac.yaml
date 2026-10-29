@@ -81,12 +81,47 @@ rules:
   # RBAC
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["roles", "rolebindings", "clusterroles", "clusterrolebindings"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    {{- if .Values.rbacScoper.enabled }}
+    resources: ["clusterroles", "clusterrolebindings"]
+    resourceNames:
+      - data-science-cluster-log-forwarder-collector-collect-app-logs
+      - data-science-cluster-log-forwarder-collector-loki-writer
+      - data-science-collector-mlflow-trace-export
+      - data-science-collector-tempo-trace-export
+      - data-science-monitoringstack-alertmanager-prometheus-metrics-reader
+      - data-science-prometheus-cluster-proxy
+      - data-science-prometheus-cluster-proxy-auth-delegator
+      - data-science-prometheus-namespace-proxy
+      - data-science-prometheus-namespace-proxy-auth-delegator
+      - data-science-thanos-querier-proxy
+      - data-science-thanos-querier-proxy-auth-delegator
+      - data-science-usage-logs-processor
+      - generate-processors-collector-rolebinding
+      - generate-processors-role
+      - generate-processors-targetallocator-discovery-rolebinding
+      - generate-processors-targetallocator-role
+      - generate-processors-targetallocator-rolebinding
+      - korrel8r-auth-delegator
+      - korrel8r-query
+    {{- else }}
+    resources:
+      - roles
+      - rolebindings
+      - clusterroles
+      - clusterrolebindings
+    {{- end }}
     verbs: ["get", "list", "watch", "create"]
-  # The controller applies and removes only its own named RBAC objects.
+  {{- if not .Values.rbacScoper.enabled }}
+  # The controller applies and removes only its own named TargetAllocator objects.
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["roles", "rolebindings"]
-    resourceNames: ["data-science-collector-targetallocator-secrets"]
+    resourceNames:
+      - data-science-collector-targetallocator-secrets
+      - data-science-collector-targetallocator-secrets-binding
     verbs: ["update", "patch", "delete"]
+  # The controller still applies these named static ClusterRoles.
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["clusterroles"]
     resourceNames:
@@ -128,6 +163,7 @@ rules:
     resources: ["clusterrolebindings"]
     resourceNames: ["usage-logs-processor", "usage-logs-loki-writer", "data-science-usage-logs-loki-writer"]
     verbs: ["delete"]
+  {{- end }}
   # Networking
   - apiGroups: ["networking.k8s.io"]
     resources: ["networkpolicies"]

@@ -1,0 +1,108 @@
+{{- if .Values.rbacScoper.enabled }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "odh-observability.fullname" . }}-protect-rbac-scoper
+  labels:
+    security.opendatahub.io/rbac-scoper: protected
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["serviceaccounts"]
+      - apiGroups: ["apps"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["deployments"]
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["clusterroles", "clusterrolebindings"]
+      - apiGroups: ["admissionregistration.k8s.io"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["validatingadmissionpolicies", "validatingadmissionpolicybindings"]
+  validations:
+    - expression: >-
+        request.userInfo.username != "system:serviceaccount:{{ .Values.operatorNamespace }}:{{ include "odh-observability.fullname" . }}" ||
+        !((request.operation == "DELETE" && has(oldObject.metadata.labels) && oldObject.metadata.labels["security.opendatahub.io/rbac-scoper"] == "protected") ||
+          (request.operation != "DELETE" && has(object.metadata.labels) && object.metadata.labels["security.opendatahub.io/rbac-scoper"] == "protected"))
+      message: "The observability manager may not modify or delete protected RBAC scoper resources."
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "odh-observability.fullname" . }}-protect-rbac-scoper
+  labels:
+    security.opendatahub.io/rbac-scoper: protected
+spec:
+  policyName: {{ include "odh-observability.fullname" . }}-protect-rbac-scoper
+  validationActions: [Deny]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "odh-observability.fullname" . }}-deny-rbac-scoper-impersonation
+  labels:
+    security.opendatahub.io/rbac-scoper: protected
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods"]
+  validations:
+    - expression: >-
+        request.userInfo.username != "system:serviceaccount:{{ .Values.operatorNamespace }}:{{ include "odh-observability.fullname" . }}" ||
+        ((!has(object.spec.serviceAccountName) || object.spec.serviceAccountName != "{{ include "odh-observability.fullname" . }}-rbac-scoper") &&
+          (!has(object.spec.serviceAccount) || object.spec.serviceAccount != "{{ include "odh-observability.fullname" . }}-rbac-scoper"))
+      message: "The observability manager may not run pods with the RBAC scoper ServiceAccount."
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "odh-observability.fullname" . }}-deny-rbac-scoper-impersonation
+  labels:
+    security.opendatahub.io/rbac-scoper: protected
+spec:
+  policyName: {{ include "odh-observability.fullname" . }}-deny-rbac-scoper-impersonation
+  validationActions: [Deny]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "odh-observability.fullname" . }}-deny-rbac-scoper-binding
+  labels:
+    security.opendatahub.io/rbac-scoper: protected
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["rolebindings", "clusterrolebindings"]
+  validations:
+    - expression: >-
+        request.userInfo.username != "system:serviceaccount:{{ .Values.operatorNamespace }}:{{ include "odh-observability.fullname" . }}" ||
+        !has(object.roleRef) ||
+        object.roleRef.name != "{{ include "odh-observability.fullname" . }}-rbac-scoper" ||
+        !has(object.subjects) ||
+        object.subjects.all(subject, subject.kind != "ServiceAccount" || subject.name != "{{ include "odh-observability.fullname" . }}" || subject.namespace != "{{ .Values.operatorNamespace }}")
+      message: "The observability manager may not bind itself to the RBAC scoper ClusterRole."
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "odh-observability.fullname" . }}-deny-rbac-scoper-binding
+  labels:
+    security.opendatahub.io/rbac-scoper: protected
+spec:
+  policyName: {{ include "odh-observability.fullname" . }}-deny-rbac-scoper-binding
+  validationActions: [Deny]
+{{- end }}
