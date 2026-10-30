@@ -28,6 +28,7 @@ import (
 	libconditions "github.com/opendatahub-io/odh-platform-utilities/pkg/controller/conditions"
 	"github.com/opendatahub-io/odh-platform-utilities/pkg/controller/gc"
 	"github.com/opendatahub-io/odh-platform-utilities/pkg/deploy"
+	odhAnnotations "github.com/opendatahub-io/odh-platform-utilities/pkg/metadata/annotations"
 	odhLabels "github.com/opendatahub-io/odh-platform-utilities/pkg/metadata/labels"
 	rendertemplate "github.com/opendatahub-io/odh-platform-utilities/pkg/render/template"
 	configv1 "github.com/openshift/api/config/v1"
@@ -769,11 +770,11 @@ func (r *MonitoringReconciler) collectGarbage(
 		return err
 	}
 
-	if err := r.collectScopedClusterRBACGarbage(ctx, monitoring, desiredSet); err != nil {
+	if err := r.collectScopedClusterRBACGarbage(ctx, monitoring, desiredSet, withheldComponents); err != nil {
 		return err
 	}
 
-	return r.collectTargetAllocatorRBACGarbage(ctx, params, desiredSet, namespace)
+	return r.collectTargetAllocatorRBACGarbage(ctx, monitoring, desiredSet)
 }
 
 // deleteAllOwned removes all resources owned by this controller (used on Removed state).
@@ -801,17 +802,18 @@ func (r *MonitoringReconciler) deleteAllOwned(ctx context.Context, monitoring *v
 		return err
 	}
 
-	if err := r.collectScopedClusterRBACGarbage(ctx, monitoring, nil); err != nil {
+	if err := r.collectScopedClusterRBACGarbage(ctx, monitoring, nil, nil); err != nil {
 		return err
 	}
 
-	return r.collectTargetAllocatorRBACGarbage(ctx, params, nil, namespace)
+	return r.collectTargetAllocatorRBACGarbage(ctx, monitoring, nil)
 }
 
 func (r *MonitoringReconciler) collectScopedClusterRBACGarbage(
 	ctx context.Context,
 	monitoring *v1alpha1.Monitoring,
 	desiredSet map[resourceKey]struct{},
+	withheldComponents map[string]struct{},
 ) error {
 	roles := &rbacv1.ClusterRoleList{}
 	if err := r.List(ctx, roles, client.MatchingLabels{
@@ -821,7 +823,9 @@ func (r *MonitoringReconciler) collectScopedClusterRBACGarbage(
 	}
 	for i := range roles.Items {
 		role := &roles.Items[i]
-		if !shouldCollectScopedClusterRBAC(monitoring, controllergvk.ClusterRole, role, scopedClusterRoleNames, desiredSet) {
+		if !shouldCollectScopedClusterRBAC(
+			monitoring, controllergvk.ClusterRole, role, scopedClusterRoleNames, desiredSet, withheldComponents,
+		) {
 			continue
 		}
 		if err := r.Delete(ctx, role, scopedRBACDeleteOptions(role)); err != nil && !k8serr.IsNotFound(err) {
@@ -837,7 +841,9 @@ func (r *MonitoringReconciler) collectScopedClusterRBACGarbage(
 	}
 	for i := range bindings.Items {
 		binding := &bindings.Items[i]
-		if !shouldCollectScopedClusterRBAC(monitoring, controllergvk.ClusterRoleBinding, binding, scopedClusterRoleBindingNames, desiredSet) {
+		if !shouldCollectScopedClusterRBAC(
+			monitoring, controllergvk.ClusterRoleBinding, binding, scopedClusterRoleBindingNames, desiredSet, withheldComponents,
+		) {
 			continue
 		}
 		if err := r.Delete(ctx, binding, scopedRBACDeleteOptions(binding)); err != nil && !k8serr.IsNotFound(err) {
@@ -865,11 +871,18 @@ func shouldCollectScopedClusterRBAC(
 	obj metav1.Object,
 	allowedNames map[string]struct{},
 	desiredSet map[resourceKey]struct{},
+	withheldComponents map[string]struct{},
 ) bool {
 	if _, allowed := allowedNames[obj.GetName()]; !allowed {
 		return false
 	}
 	if !isOwnedByMonitoring(monitoring, obj) {
+		return false
+	}
+	if isNotManagedByODHOperator(obj) {
+		return false
+	}
+	if _, isWithheld := withheldComponents[obj.GetLabels()[componentLabel]]; isWithheld {
 		return false
 	}
 
@@ -880,25 +893,53 @@ func shouldCollectScopedClusterRBAC(
 
 func (r *MonitoringReconciler) collectTargetAllocatorRBACGarbage(
 	ctx context.Context,
-	params gc.RunParams,
+	monitoring *v1alpha1.Monitoring,
 	desiredSet map[resourceKey]struct{},
-	namespace string,
 ) error {
-	collector := gc.New(
-		gc.WithLabel(odhLabels.PlatformPartOf, monitoringPartOf),
-		// Role and RoleBinding listing remains cluster-wide, but the
-		// SelfSubjectRulesReview used by the collector requires a namespace.
-		gc.InNamespace(namespace),
-		gc.WithDeletePropagationPolicy(metav1.DeletePropagationBackground),
-		gc.WithTypePredicate(func(_ gc.RunParams, gvk schema.GroupVersionKind) (bool, error) {
-			return gvk == controllergvk.Role || gvk == controllergvk.RoleBinding, nil
-		}),
-		gc.WithObjectPredicate(func(_ gc.RunParams, obj unstructured.Unstructured) (bool, error) {
-			return shouldCollectTargetAllocatorRBAC(params.Owner, obj, desiredSet), nil
-		}),
-	)
+	roles := &rbacv1.RoleList{}
+	if err := r.List(ctx, roles, client.MatchingLabels{
+		odhLabels.PlatformPartOf: monitoringPartOf,
+	}); err != nil {
+		return fmt.Errorf("listing TargetAllocator Roles: %w", err)
+	}
+	for i := range roles.Items {
+		role := &roles.Items[i]
+		if !shouldCollectTargetAllocatorRBAC(
+			monitoring, role, controllergvk.Role, desiredSet,
+		) {
+			continue
+		}
+		if err := r.Delete(ctx, role,
+			scopedRBACDeleteOptions(role),
+			client.PropagationPolicy(metav1.DeletePropagationBackground),
+		); err != nil && !k8serr.IsNotFound(err) {
+			return fmt.Errorf("deleting TargetAllocator Role %s/%s: %w", role.Namespace, role.Name, err)
+		}
+	}
 
-	return collector.Run(ctx, params)
+	bindings := &rbacv1.RoleBindingList{}
+	if err := r.List(ctx, bindings, client.MatchingLabels{
+		odhLabels.PlatformPartOf: monitoringPartOf,
+	}); err != nil {
+		return fmt.Errorf("listing TargetAllocator RoleBindings: %w", err)
+	}
+	for i := range bindings.Items {
+		binding := &bindings.Items[i]
+		if !shouldCollectTargetAllocatorRBAC(
+			monitoring, binding, controllergvk.RoleBinding, desiredSet,
+		) {
+			continue
+		}
+		if err := r.Delete(ctx, binding,
+			scopedRBACDeleteOptions(binding),
+			client.PropagationPolicy(metav1.DeletePropagationBackground),
+		); err != nil && !k8serr.IsNotFound(err) {
+			return fmt.Errorf("deleting TargetAllocator RoleBinding %s/%s: %w",
+				binding.Namespace, binding.Name, err)
+		}
+	}
+
+	return nil
 }
 
 func shouldCollectOwnedResource(
@@ -948,20 +989,28 @@ func shouldCollectOwnedResource(
 
 func shouldCollectTargetAllocatorRBAC(
 	monitoring client.Object,
-	obj unstructured.Unstructured,
+	obj metav1.Object,
+	gvk schema.GroupVersionKind,
 	desiredSet map[resourceKey]struct{},
 ) bool {
-	if !isTargetAllocatorSecretRBAC(obj) || !isOwnedByMonitoring(monitoring, &obj) {
+	if !isTargetAllocatorSecretRBAC(obj, gvk) || !isOwnedByMonitoring(monitoring, obj) {
+		return false
+	}
+	if isNotManagedByODHOperator(obj) {
 		return false
 	}
 
 	k := resourceKey{
-		gvk:       obj.GroupVersionKind(),
+		gvk:       gvk,
 		namespace: obj.GetNamespace(),
 		name:      obj.GetName(),
 	}
 	_, inDesired := desiredSet[k]
 	return !inDesired
+}
+
+func isNotManagedByODHOperator(obj metav1.Object) bool {
+	return obj.GetAnnotations()[odhAnnotations.ManagedByODHOperator] == "false"
 }
 
 func isOwnedByMonitoring(monitoring client.Object, obj metav1.Object) bool {
@@ -976,9 +1025,9 @@ func isInMonitoringScope(obj metav1.Object, namespace string) bool {
 	return obj.GetNamespace() == "" || obj.GetNamespace() == namespace || obj.GetNamespace() == clusterLoggingNamespace
 }
 
-func isTargetAllocatorSecretRBAC(obj unstructured.Unstructured) bool {
+func isTargetAllocatorSecretRBAC(obj metav1.Object, gvk schema.GroupVersionKind) bool {
 	return obj.GetName() == targetAllocatorSecretRBACName &&
-		(obj.GroupVersionKind() == controllergvk.Role || obj.GroupVersionKind() == controllergvk.RoleBinding)
+		(gvk == controllergvk.Role || gvk == controllergvk.RoleBinding)
 }
 
 // patchStatus uses MergePatch to update the status subresource.

@@ -1549,7 +1549,9 @@ func TestGarbageCollectionOwnershipAndNamespaceScope(t *testing.T) {
 				monitoring, test.obj, test.desired, monitoring.Spec.Namespace, nil); got != test.wantMainGC {
 				t.Errorf("main GC eligibility: want %t, got %t", test.wantMainGC, got)
 			}
-			if got := shouldCollectTargetAllocatorRBAC(monitoring, test.obj, test.desired); got != test.wantTargetGC {
+			if got := shouldCollectTargetAllocatorRBAC(
+				monitoring, &test.obj, test.obj.GroupVersionKind(), test.desired,
+			); got != test.wantTargetGC {
 				t.Errorf("TargetAllocator GC eligibility: want %t, got %t", test.wantTargetGC, got)
 			}
 		})
@@ -1557,7 +1559,7 @@ func TestGarbageCollectionOwnershipAndNamespaceScope(t *testing.T) {
 
 	withoutUID := monitoring.DeepCopy()
 	withoutUID.UID = ""
-	if shouldCollectTargetAllocatorRBAC(withoutUID, staleTargetRole, nil) {
+	if shouldCollectTargetAllocatorRBAC(withoutUID, &staleTargetRole, staleTargetRole.GroupVersionKind(), nil) {
 		t.Error("GC must fail closed when the Monitoring UID is unavailable")
 	}
 }
@@ -1603,29 +1605,45 @@ func TestScopedClusterRBACGarbageCollection(t *testing.T) {
 	unknownRole := clusterRole("unrelated-owned-role")
 	staleBinding := clusterRoleBinding("data-science-collector-mlflow-trace-export")
 	desiredBinding := clusterRoleBinding("generate-processors-collector-rolebinding")
+	managedFalseRole := clusterRole("data-science-metrics-view")
+	withheldRole := clusterRole("data-science-usage-logs-processor")
 
 	otherOwnerRole.OwnerReferences = []metav1.OwnerReference{otherOwnerReference}
+	managedFalseRole.Annotations = map[string]string{"opendatahub.io/managed": "false"}
+	withheldRole.Labels = map[string]string{
+		odhLabels.PlatformPartOf: monitoringPartOf,
+		componentLabel:           componentLokiUsageLogs,
+	}
 	reconciler := &MonitoringReconciler{
 		Client: fake.NewClientBuilder().WithScheme(scheme).
-			WithObjects(staleRole, desiredRole, otherOwnerRole, unknownRole, staleBinding, desiredBinding).
+			WithObjects(
+				staleRole, desiredRole, otherOwnerRole, unknownRole, staleBinding, desiredBinding,
+				managedFalseRole, withheldRole,
+			).
 			Build(),
 	}
 
-	err := reconciler.collectScopedClusterRBACGarbage(context.Background(), monitoring, map[resourceKey]struct{}{
-		{gvk: controllergvk.ClusterRole, name: desiredRole.Name}:           {},
-		{gvk: controllergvk.ClusterRoleBinding, name: desiredBinding.Name}: {},
-	})
+	err := reconciler.collectScopedClusterRBACGarbage(
+		context.Background(), monitoring,
+		map[resourceKey]struct{}{
+			{gvk: controllergvk.ClusterRole, name: desiredRole.Name}:           {},
+			{gvk: controllergvk.ClusterRoleBinding, name: desiredBinding.Name}: {},
+		},
+		map[string]struct{}{componentLokiUsageLogs: {}},
+	)
 	if err != nil {
 		t.Fatalf("scoped RBAC garbage collection returned an error: %v", err)
 	}
 
 	for name, exists := range map[string]bool{
-		staleRole.Name:      false,
-		staleBinding.Name:   false,
-		desiredRole.Name:    true,
-		desiredBinding.Name: true,
-		otherOwnerRole.Name: true,
-		unknownRole.Name:    true,
+		staleRole.Name:        false,
+		staleBinding.Name:     false,
+		desiredRole.Name:      true,
+		desiredBinding.Name:   true,
+		otherOwnerRole.Name:   true,
+		unknownRole.Name:      true,
+		managedFalseRole.Name: true,
+		withheldRole.Name:     true,
 	} {
 		role := &rbacv1.ClusterRole{}
 		roleErr := reconciler.Get(context.Background(), types.NamespacedName{Name: name}, role)
@@ -1634,6 +1652,94 @@ func TestScopedClusterRBACGarbageCollection(t *testing.T) {
 		found := roleErr == nil || bindingErr == nil
 		if found != exists {
 			t.Errorf("%s: found=%t, want %t", name, found, exists)
+		}
+	}
+}
+
+func TestTargetAllocatorRBACGarbageCollection(t *testing.T) {
+	scheme := newTestScheme(t)
+	monitoring := newMonitoring(v1alpha1.MonitoringInstanceName)
+	monitoring.UID = types.UID("monitoring-owner")
+	controller := true
+	ownerReference := metav1.OwnerReference{
+		APIVersion: v1alpha1.GroupVersion.String(),
+		Kind:       "Monitoring",
+		Name:       monitoring.Name,
+		UID:        monitoring.UID,
+		Controller: &controller,
+	}
+	labels := map[string]string{odhLabels.PlatformPartOf: monitoringPartOf}
+
+	role := func(namespace string) *rbacv1.Role {
+		return &rbacv1.Role{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:            targetAllocatorSecretRBACName,
+				Namespace:       namespace,
+				Labels:          labels,
+				OwnerReferences: []metav1.OwnerReference{ownerReference},
+			},
+		}
+	}
+	roleBinding := func(namespace string) *rbacv1.RoleBinding {
+		return &rbacv1.RoleBinding{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:            targetAllocatorSecretRBACName,
+				Namespace:       namespace,
+				Labels:          labels,
+				OwnerReferences: []metav1.OwnerReference{ownerReference},
+			},
+		}
+	}
+
+	staleRole := role("team-a")
+	desiredRole := role("team-b")
+	managedFalseRole := role("team-c")
+	managedFalseRole.Annotations = map[string]string{"opendatahub.io/managed": "false"}
+	otherOwnerRole := role("team-d")
+	otherOwnerRole.OwnerReferences[0].UID = types.UID("other-monitoring")
+	unlabelledRole := role("team-e")
+	unlabelledRole.Labels = nil
+
+	staleBinding := roleBinding("team-a")
+	desiredBinding := roleBinding("team-b")
+	reconciler := &MonitoringReconciler{
+		Client: fake.NewClientBuilder().WithScheme(scheme).
+			WithObjects(
+				staleRole, desiredRole, managedFalseRole, otherOwnerRole, unlabelledRole,
+				staleBinding, desiredBinding,
+			).
+			Build(),
+	}
+
+	err := reconciler.collectTargetAllocatorRBACGarbage(context.Background(), monitoring, map[resourceKey]struct{}{
+		{gvk: controllergvk.Role, namespace: desiredRole.Namespace, name: desiredRole.Name}:              {},
+		{gvk: controllergvk.RoleBinding, namespace: desiredBinding.Namespace, name: desiredBinding.Name}: {},
+	})
+	if err != nil {
+		t.Fatalf("TargetAllocator RBAC garbage collection returned an error: %v", err)
+	}
+
+	for name, namespace := range map[string]string{
+		staleRole.Name:        "team-a",
+		staleBinding.Name:     "team-a",
+		desiredRole.Name:      "team-b",
+		desiredBinding.Name:   "team-b",
+		managedFalseRole.Name: "team-c",
+		otherOwnerRole.Name:   "team-d",
+		unlabelledRole.Name:   "team-e",
+	} {
+		roleErr := reconciler.Get(context.Background(), types.NamespacedName{
+			Namespace: namespace,
+			Name:      name,
+		}, &rbacv1.Role{})
+		bindingErr := reconciler.Get(context.Background(), types.NamespacedName{
+			Namespace: namespace,
+			Name:      name,
+		}, &rbacv1.RoleBinding{})
+		found := roleErr == nil || bindingErr == nil
+		wantFound := namespace != "team-a"
+		if found != wantFound {
+			t.Errorf("%s/%s: found=%t, want %t", namespace, name, found, wantFound)
 		}
 	}
 }
