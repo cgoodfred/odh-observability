@@ -2574,6 +2574,7 @@ func (tc *MonitoringTestCtx) runNetworkingTests(t *testing.T) {
 		t.Run("OTLP metric identity cannot be spoofed", tc.ValidateOTLPMetricIdentityCannotBeSpoofed)
 		t.Run("Node metrics endpoint deployment", tc.ValidateNodeMetricsEndpointDeployment)
 		t.Run("Node metrics endpoint RBAC configuration", tc.ValidateNodeMetricsEndpointRBACConfiguration)
+		t.Run("Namespace isolation POST form bypass", tc.ValidateNamespaceIsolationPostFormBypass)
 		t.Run("Operator metrics authentication and authorization", tc.ValidateOperatorMetricsAuthenticationAndAuthorization)
 		t.Run("Operand NetworkPolicies and lifecycle", tc.ValidateOperandNetworkPolicies)
 		t.Run("Collector and TargetAllocator NetworkPolicy contract", tc.ValidateCollectorNetworkPolicyContract)
@@ -2610,7 +2611,8 @@ func (tc *MonitoringTestCtx) validatePrometheusNamespaceProxyResourcesCommon(t *
 		}),
 		WithCondition(And(
 			jq.Match(`.status.readyReplicas == 1`),
-			jq.Match(`.spec.template.spec.containers | length == 2`),
+			jq.Match(`.spec.template.spec.containers | length == 3`),
+			jq.Match(`[.spec.template.spec.containers[].name] | contains(["kube-rbac-proxy", "method-gate", "prom-label-proxy"])`),
 		)),
 		WithCustomErrorMsg("data-science-prometheus-namespace-proxy deployment should be created and ready"),
 	)
@@ -2728,7 +2730,8 @@ func (tc *MonitoringTestCtx) ValidatePrometheusSecureProxyAuthentication(t *test
 		}),
 		WithCondition(And(
 			jq.Match(`.spec.template.spec.containers[0].args | map(select(contains("--upstream="))) | length == 1`),
-			jq.Match(`.spec.template.spec.containers[0].args | map(select(contains("--upstream=http://127.0.0.1:9091/"))) | length == 1`),
+			// kube-rbac-proxy forwards to the method gate (:9092), not directly to prom-label-proxy (:9091).
+			jq.Match(`.spec.template.spec.containers[0].args | map(select(contains("--upstream=http://127.0.0.1:9092/"))) | length == 1`),
 			jq.Match(`.spec.template.spec.containers[0].args | map(select(contains("--secure-listen-address=0.0.0.0:8443"))) | length == 1`),
 		)),
 		WithCustomErrorMsg("kube-rbac-proxy should be configured with correct upstream and secure listen address"),
@@ -3124,6 +3127,52 @@ func (tc *MonitoringTestCtx) ValidateNodeMetricsEndpointRBACConfiguration(t *tes
 		)),
 		WithCustomErrorMsg("deployment should have volumes and mounts for mTLS to Prometheus"),
 	)
+}
+
+func (tc *MonitoringTestCtx) ValidateNamespaceIsolationPostFormBypass(t *testing.T) {
+	t.Helper()
+	tc = tc.WithT(t)
+
+	tc.EnsureResourceDoesNotExist(
+		WithMinimalObject(gvk.ClusterRole, types.NamespacedName{Name: "data-science-metrics-view"}),
+		WithCustomErrorMsg("ClusterRole 'data-science-metrics-view' must not exist"),
+	)
+
+	tc.EnsureResourceExists(
+		WithMinimalObject(gvk.Deployment, types.NamespacedName{
+			Name:      "data-science-prometheus-namespace-proxy",
+			Namespace: tc.MonitoringNamespace,
+		}),
+		WithCondition(And(
+			jq.Match(`.spec.template.spec.containers[] | select(.name == "prom-label-proxy") | .args | contains(["--query-param=namespace"])`),
+			jq.Match(`.spec.template.spec.containers[] | select(.name == "prom-label-proxy") | .args | contains(["--error-on-replace"])`),
+			// Defense-in-depth: a method gate rejects non-GET/HEAD before prom-label-proxy,
+			// and kube-rbac-proxy forwards to it (:9092) rather than to prom-label-proxy (:9091).
+			jq.Match(`[.spec.template.spec.containers[].name] | contains(["method-gate"])`),
+			jq.Match(`.spec.template.spec.containers[] | select(.name == "kube-rbac-proxy") | .args | contains(["--upstream=http://127.0.0.1:9092/"])`),
+		)),
+		WithCustomErrorMsg("namespace proxy must have the method gate and route kube-rbac-proxy through it"),
+	)
+
+	t.Log("POST-body namespace bypass is closed: the method gate rejects non-GET/HEAD (403) before prom-label-proxy")
+
+	host := tc.routeHost(t, "data-science-prometheus-route")
+	rootCAs := clusterIngressCAPool(t, tc)
+
+	// Token authorized for "get" on pods.metrics.k8s.io. The proxy ConfigMap uses a
+	// static resourceAttributes.verb: get, so kube-rbac-proxy authorizes this POST;
+	// only the method gate can reject it. Asserting the gate body proves the 403 is
+	// not from kube-rbac-proxy.
+	getToken := tc.mintScopedMetricsGetToken(t, tc.MonitoringNamespace)
+
+	g := NewWithT(t)
+	g.Eventually(func(g Gomega) {
+		status, body, err := postPromQLForm(tc.Context(), rootCAs, host, getToken, tc.MonitoringNamespace, "openshift-monitoring")
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(status).To(Equal(http.StatusForbidden),
+			"POST with a get-authorized token must be rejected with 403 by the method gate; got %d", status)
+		g.Expect(body).To(ContainSubstring("only GET and HEAD are allowed"))
+	}).WithTimeout(2 * time.Minute).WithPolling(5 * time.Second).Should(Succeed())
 }
 
 func (tc *MonitoringTestCtx) ValidateOperatorMetricsAuthenticationAndAuthorization(t *testing.T) {
