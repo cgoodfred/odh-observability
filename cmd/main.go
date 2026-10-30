@@ -17,10 +17,13 @@ limitations under the License.
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
+	"mime"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -58,6 +61,11 @@ import (
 
 var scheme = runtime.NewScheme()
 
+const (
+	prometheusInstantQueryPath = "/api/v1/query"
+	formContentType            = "application/x-www-form-urlencoded"
+)
+
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(v1alpha1.AddToScheme(scheme))
@@ -76,8 +84,8 @@ func main() {
 	// The controller path replaces this with the flag-configured logger below.
 	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
 
-	// The "method-gate" subcommand runs a minimal read-only reverse proxy that
-	// only forwards GET/HEAD (see runMethodGate). It reuses this operator image as
+	// The "method-gate" subcommand runs a minimal read-only reverse proxy
+	// (see runMethodGate). It reuses this operator image as
 	// a sidecar, so no extra container image has to be shipped for disconnected
 	// installs. It must be handled before the controller-manager flag setup below.
 	if len(os.Args) > 1 && os.Args[1] == "method-gate" {
@@ -200,21 +208,78 @@ func main() {
 	}
 }
 
-// methodGateHandler returns an HTTP handler that forwards only GET and HEAD
-// requests to the upstream and rejects every other method with 403, regardless
-// of any authentication or RBAC decision made upstream. It sits in front of
-// prom-label-proxy so that a POST (which prom-label-proxy would otherwise parse
-// via ParseForm, merging a body "namespace" into the enforced label matcher)
-// can never reach it.
-func methodGateHandler(upstream *url.URL) http.Handler {
+// methodGateHandler restricts methods independently of upstream authorization.
+// When enabled for the Thanos proxy, form POSTs are restricted to read-only
+// query APIs and cannot contain namespace, which is authorized only in the URL.
+func methodGateHandler(upstream *url.URL, allowFormPost bool) http.Handler {
 	proxy := httputil.NewSingleHostReverseProxy(upstream)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet && r.Method != http.MethodHead {
-			http.Error(w, "only GET and HEAD are allowed", http.StatusForbidden)
+		if r.Method == http.MethodGet || r.Method == http.MethodHead {
+			proxy.ServeHTTP(w, r)
+			return
+		}
+		if !allowFormPost || r.Method != http.MethodPost || !isReadOnlyPrometheusPostPath(r.URL.Path) {
+			message := "method not allowed"
+			if !allowFormPost {
+				message = "only GET and HEAD are allowed"
+			}
+			http.Error(w, message, http.StatusForbidden)
+			return
+		}
+		if !validateQueryForm(w, r) {
 			return
 		}
 		proxy.ServeHTTP(w, r)
 	})
+}
+
+func isReadOnlyPrometheusPostPath(path string) bool {
+	switch path {
+	case prometheusInstantQueryPath, "/api/v1/query_range", "/api/v1/query_exemplars", "/api/v1/series", "/api/v1/labels":
+		return true
+	default:
+		return false
+	}
+}
+
+// validateQueryForm leaves the original body intact after checking it with the
+// same URL-form parser used by prom-label-proxy. Fail closed on ambiguous or
+// malformed input so no body namespace can bypass the URL-only SAR.
+func validateQueryForm(w http.ResponseWriter, r *http.Request) bool {
+	defer r.Body.Close()
+	contentTypes := r.Header.Values("Content-Type")
+	if len(contentTypes) != 1 || len(r.Header.Values("Content-Encoding")) != 0 {
+		http.Error(w, "expected an unencoded form", http.StatusUnsupportedMediaType)
+		return false
+	}
+	mediaType, _, err := mime.ParseMediaType(contentTypes[0])
+	if err != nil || mediaType != formContentType {
+		http.Error(w, "expected an unencoded form", http.StatusUnsupportedMediaType)
+		return false
+	}
+	const maxFormBytes = 10 << 20 // Match net/http's default ParseForm limit.
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxFormBytes))
+	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			http.Error(w, "form too large", http.StatusRequestEntityTooLarge)
+		} else {
+			http.Error(w, "could not read form", http.StatusBadRequest)
+		}
+		return false
+	}
+	form, err := url.ParseQuery(string(body))
+	if err != nil {
+		http.Error(w, "invalid form", http.StatusBadRequest)
+		return false
+	}
+	if _, exists := form["namespace"]; exists {
+		http.Error(w, "namespace must be in the URL", http.StatusForbidden)
+		return false
+	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	r.ContentLength = int64(len(body))
+	return true
 }
 
 // runMethodGate runs the read-only method gate described in methodGateHandler.
@@ -228,6 +293,7 @@ func runMethodGate(argv []string) error {
 	fs := flag.NewFlagSet("method-gate", flag.ExitOnError)
 	listen := fs.String("listen", "127.0.0.1:9092", "address the method gate listens on")
 	upstream := fs.String("upstream", "http://127.0.0.1:9091", "upstream to forward GET/HEAD requests to")
+	allowFormPost := fs.Bool("allow-form-post", false, "allow read-only form POSTs without a body namespace")
 	if err := fs.Parse(argv); err != nil {
 		return err
 	}
@@ -242,7 +308,7 @@ func runMethodGate(argv []string) error {
 
 	srv := &http.Server{
 		Addr:              *listen,
-		Handler:           methodGateHandler(upstreamURL),
+		Handler:           methodGateHandler(upstreamURL, *allowFormPost),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

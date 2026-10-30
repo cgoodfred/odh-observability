@@ -104,6 +104,13 @@ const (
 	Korrel8rRBACTemplate                             = "resources/korrel8r-rbac.tmpl.yaml"
 	Korrel8rNetworkPolicyTemplate                    = "resources/korrel8r-network-policy.tmpl.yaml"
 
+	// Pre-scoping Perses datasources used shared SA-token Secrets. Remove only
+	// the legacy tokens owned by this Monitoring resource during upgrades.
+	legacyDataSciencePrometheusDatasourceSecret    = "data-science-prometheus-datasource-secret"
+	legacyClusterPrometheusDatasourceSecret        = "cluster-prometheus-datasource-secret"
+	legacyClusterPrometheusTenancyDatasourceSecret = "cluster-prometheus-tenancy-datasource-secret"
+	legacyPersesDatasourceServiceAccount           = "data-science-prometheus-cluster-proxy"
+
 	PersesTempoDatasourceName = "tempo-datasource"
 	PersesTempoDashboardName  = "data-science-tempo-traces"
 
@@ -537,12 +544,61 @@ func deployPersesPrometheusIntegration(
 		return nil
 	}
 
+	if err := cleanupLegacyPersesDatasourceSATokenSecrets(ctx, c, monitoring); err != nil {
+		return err
+	}
+
 	cm.MarkTrue(conditions.ConditionPersesPrometheusDataSourceAvailable)
+	// Feature: default DS datasource → namespace-enforcing Thanos proxy :8443.
+	// Guardrail: cluster :9091 / tenancy :9092 use caller token (no shared SA).
 	*sources = append(*sources,
 		src(PersesDatasourcePrometheusTemplate),
 		src(PersesDatasourceClusterPrometheusTemplate),
 		src(PersesDatasourceClusterPrometheusTenancyTemplate),
 	)
+	return nil
+}
+
+// cleanupLegacyPersesDatasourceSATokenSecrets removes operator-owned legacy
+// service-account tokens, without deleting unrelated secrets with the same name.
+func cleanupLegacyPersesDatasourceSATokenSecrets(ctx context.Context, c client.Client, monitoring *v1alpha1.Monitoring) error {
+	namespace := monitoringNamespace(monitoring)
+	for _, name := range []string{
+		legacyDataSciencePrometheusDatasourceSecret,
+		legacyClusterPrometheusDatasourceSecret,
+		legacyClusterPrometheusTenancyDatasourceSecret,
+	} {
+		if err := cleanupLegacyPersesDatasourceSATokenSecret(ctx, c, monitoring, namespace, name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func cleanupLegacyPersesDatasourceSATokenSecret(ctx context.Context, c client.Client, monitoring *v1alpha1.Monitoring, namespace, name string) error {
+	if namespace == "" || name == "" {
+		return nil
+	}
+	secret := &corev1.Secret{}
+	err := c.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, secret)
+	if err != nil {
+		if k8serr.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("getting legacy Perses datasource secret %s/%s: %w", namespace, name, err)
+	}
+	if secret.Type != corev1.SecretTypeServiceAccountToken ||
+		secret.Annotations[corev1.ServiceAccountNameKey] != legacyPersesDatasourceServiceAccount ||
+		!isOwnedByMonitoring(monitoring, secret) {
+		return nil
+	}
+	// Avoid deleting a replacement or a secret modified since the cached read.
+	preconditions := client.Preconditions{UID: &secret.UID, ResourceVersion: &secret.ResourceVersion}
+	if err := c.Delete(ctx, secret, preconditions); err != nil && !k8serr.IsNotFound(err) {
+		return fmt.Errorf("deleting legacy Perses datasource SA token secret %s/%s: %w", namespace, name, err)
+	}
+	logf.FromContext(ctx).Info("deleted legacy shared-SA Perses datasource secret",
+		"secret", name, "namespace", namespace)
 	return nil
 }
 

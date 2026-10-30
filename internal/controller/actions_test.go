@@ -38,6 +38,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -824,12 +825,176 @@ func TestDeployPersesPrometheusIntegration_CRDPresent(t *testing.T) {
 	}
 
 	if len(sources) != 3 {
-		t.Errorf("expected 3 sources (prometheus + cluster prometheus + tenancy datasource), got %d", len(sources))
+		t.Errorf("expected 3 sources (DS proxy + cluster caller-token + tenancy), got %d", len(sources))
 	}
+	assertTemplatePaths(t, sources, []string{
+		PersesDatasourcePrometheusTemplate,
+		PersesDatasourceClusterPrometheusTemplate,
+		PersesDatasourceClusterPrometheusTenancyTemplate,
+	})
 
 	c := findCondition(m, conditions.ConditionPersesPrometheusDataSourceAvailable)
 	if c == nil || c.Status != metav1.ConditionTrue {
 		t.Error("PersesPrometheusDataSourceAvailable should be True")
+	}
+}
+
+func TestCleanupLegacyPersesDatasourceSATokenSecrets_DeletesSATokens(t *testing.T) {
+	t.Parallel()
+
+	s := newActionsTestScheme(t)
+	m := newMonitoring(v1alpha1.MonitoringInstanceName)
+	m.UID = "monitoring-uid"
+	m.Spec.Namespace = "opendatahub"
+	controller := true
+	legacyMeta := func(name string) metav1.ObjectMeta {
+		return metav1.ObjectMeta{
+			Name: name, Namespace: m.Spec.Namespace, UID: types.UID(name),
+			Annotations:     map[string]string{corev1.ServiceAccountNameKey: legacyPersesDatasourceServiceAccount},
+			OwnerReferences: []metav1.OwnerReference{{UID: m.UID, Controller: &controller}},
+		}
+	}
+	dsLegacy := &corev1.Secret{
+		ObjectMeta: legacyMeta(legacyDataSciencePrometheusDatasourceSecret),
+		Type:       corev1.SecretTypeServiceAccountToken,
+	}
+	clusterLegacy := &corev1.Secret{
+		ObjectMeta: legacyMeta(legacyClusterPrometheusDatasourceSecret),
+		Type:       corev1.SecretTypeServiceAccountToken,
+	}
+	tenancyLegacy := &corev1.Secret{
+		ObjectMeta: legacyMeta(legacyClusterPrometheusTenancyDatasourceSecret),
+		Type:       corev1.SecretTypeServiceAccountToken,
+	}
+	cli := fake.NewClientBuilder().WithScheme(s).WithObjects(dsLegacy, clusterLegacy, tenancyLegacy).Build()
+
+	if err := cleanupLegacyPersesDatasourceSATokenSecrets(context.Background(), cli, m); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, obj := range []client.Object{dsLegacy, clusterLegacy, tenancyLegacy} {
+		err := cli.Get(context.Background(), client.ObjectKeyFromObject(obj), &corev1.Secret{})
+		if !k8serr.IsNotFound(err) {
+			t.Fatalf("legacy SA token secret %s must be deleted, got %v", obj.GetName(), err)
+		}
+	}
+}
+
+func TestCleanupLegacyPersesDatasourceSATokenSecrets_KeepsTLSSecret(t *testing.T) {
+	t.Parallel()
+
+	s := newActionsTestScheme(t)
+	m := newMonitoring(v1alpha1.MonitoringInstanceName)
+	m.Spec.Namespace = "opendatahub"
+	tlsSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      legacyClusterPrometheusDatasourceSecret,
+			Namespace: "opendatahub",
+			Annotations: map[string]string{
+				// Stale annotation must not cause delete of TLS CA material.
+				"kubernetes.io/service-account.name": "data-science-prometheus-cluster-proxy",
+			},
+		},
+		Type: corev1.SecretTypeOpaque,
+		Data: map[string][]byte{"ca.crt": []byte("dummy")},
+	}
+	cli := fake.NewClientBuilder().WithScheme(s).WithObjects(tlsSecret).Build()
+
+	if err := cleanupLegacyPersesDatasourceSATokenSecrets(context.Background(), cli, m); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := cli.Get(context.Background(), client.ObjectKeyFromObject(tlsSecret), &corev1.Secret{}); err != nil {
+		t.Fatalf("TLS CA secret must be kept: %v", err)
+	}
+}
+
+func TestCleanupLegacyPersesDatasourceSATokenSecrets_LeavesUnrelatedTokens(t *testing.T) {
+	t.Parallel()
+
+	s := newActionsTestScheme(t)
+	m := newMonitoring(v1alpha1.MonitoringInstanceName)
+	m.UID = "monitoring-uid"
+	m.Spec.Namespace = "opendatahub"
+	controller := true
+	secrets := []*corev1.Secret{
+		{ObjectMeta: metav1.ObjectMeta{
+			Name: legacyClusterPrometheusDatasourceSecret, Namespace: m.Spec.Namespace,
+			Annotations: map[string]string{corev1.ServiceAccountNameKey: legacyPersesDatasourceServiceAccount},
+		}, Type: corev1.SecretTypeServiceAccountToken},
+		{ObjectMeta: metav1.ObjectMeta{
+			Name: legacyClusterPrometheusTenancyDatasourceSecret, Namespace: m.Spec.Namespace,
+			Annotations:     map[string]string{corev1.ServiceAccountNameKey: "another-service-account"},
+			OwnerReferences: []metav1.OwnerReference{{UID: m.UID, Controller: &controller}},
+		}, Type: corev1.SecretTypeServiceAccountToken},
+	}
+	cli := fake.NewClientBuilder().WithScheme(s).WithObjects(secrets[0], secrets[1]).Build()
+	if err := cleanupLegacyPersesDatasourceSATokenSecrets(context.Background(), cli, m); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, secret := range secrets {
+		if err := cli.Get(context.Background(), client.ObjectKeyFromObject(secret), &corev1.Secret{}); err != nil {
+			t.Fatalf("unrelated secret %s must be kept: %v", secret.Name, err)
+		}
+	}
+}
+
+func TestDeployPersesPrometheusIntegrationCleansSecretsInEffectiveNamespace(t *testing.T) {
+	t.Setenv("MONITORING_NAMESPACE", "custom-monitoring")
+	s := newActionsTestScheme(t)
+	registerCRDs(s, gvk.PersesDatasourceV1Alpha2)
+	m := newMonitoring(v1alpha1.MonitoringInstanceName)
+	m.UID = "monitoring-uid"
+	m.Spec.Namespace = ""
+	m.Spec.Metrics = &v1alpha1.Metrics{Storage: &v1alpha1.MetricsStorage{}}
+	controller := true
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+		Name: legacyClusterPrometheusDatasourceSecret, Namespace: "custom-monitoring", UID: "secret-uid",
+		Annotations:     map[string]string{corev1.ServiceAccountNameKey: legacyPersesDatasourceServiceAccount},
+		OwnerReferences: []metav1.OwnerReference{{UID: m.UID, Controller: &controller}},
+	}, Type: corev1.SecretTypeServiceAccountToken}
+	cli := fake.NewClientBuilder().WithScheme(s).WithObjects(secret).Build()
+	var sources []rendertemplate.TemplateSource
+	err := deployPersesPrometheusIntegration(context.Background(), cli, m,
+		conditions.NewConditionsManager(m, m.Generation), &sources, "v1alpha2", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := cli.Get(context.Background(), client.ObjectKeyFromObject(secret), &corev1.Secret{}); !k8serr.IsNotFound(err) {
+		t.Fatalf("legacy secret in effective namespace must be deleted, got %v", err)
+	}
+}
+
+func TestCleanupLegacyPersesDatasourceSATokenSecretsUsesDeletePreconditions(t *testing.T) {
+	t.Parallel()
+	s := newActionsTestScheme(t)
+	m := newMonitoring(v1alpha1.MonitoringInstanceName)
+	m.UID = "monitoring-uid"
+	m.Spec.Namespace = "opendatahub"
+	controller := true
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+		Name: legacyClusterPrometheusDatasourceSecret, Namespace: m.Spec.Namespace, UID: "secret-uid",
+		Annotations:     map[string]string{corev1.ServiceAccountNameKey: legacyPersesDatasourceServiceAccount},
+		OwnerReferences: []metav1.OwnerReference{{UID: m.UID, Controller: &controller}},
+	}, Type: corev1.SecretTypeServiceAccountToken}
+	called := false
+	cli := fake.NewClientBuilder().WithScheme(s).WithObjects(secret).WithInterceptorFuncs(interceptor.Funcs{
+		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			called = true
+			options := &client.DeleteOptions{}
+			for _, opt := range opts {
+				opt.ApplyToDelete(options)
+			}
+			if options.Preconditions == nil || options.Preconditions.UID == nil || *options.Preconditions.UID != secret.UID ||
+				options.Preconditions.ResourceVersion == nil || *options.Preconditions.ResourceVersion != obj.GetResourceVersion() {
+				t.Fatalf("delete must use the observed UID and resource version: %#v", options.Preconditions)
+			}
+			return c.Delete(ctx, obj, opts...)
+		},
+	}).Build()
+	if err := cleanupLegacyPersesDatasourceSATokenSecrets(context.Background(), cli, m); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !called {
+		t.Fatal("expected the legacy token to be deleted")
 	}
 }
 
